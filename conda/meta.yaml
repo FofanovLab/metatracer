@@ -1,0 +1,20 @@
+requirements:
+  host:
+    - python
+    - pip
+  run:
+    - python
+    - mtsv-tools >=2.0.0
+    - click
+    - biopython
+    - pysam
+    - intervaltree
+    - ete3
+    - tqdm
+    - tabix
+    - bgzip
+test:
+  requires:
+    - pytest
+run_constrained:
+  - mtsv-tools >=2.0.1
