@@ -90,7 +90,8 @@ metatracer reference-build \
   --data-dir bacteria.datasets/ncbi_dataset/data \
   --report bacteria.datasets/assembly_data_report.jsonl \
   --out-dir metatracer_ref/ \
-  --summary-out metatracer_ref/metatracer_reference.map.tsv \
+  --summary-out metatracer_ref/metatracer_reference.summary.txt \
+  --map_out metatracer_ref/metatracer_reference.map.tsv \
   --max-size-mb 10000 \
   --index-gff
 ```
@@ -243,11 +244,12 @@ Example:
 
 ```bash
 metatracer annotate \
-  --assignments filter/sample.filtered.assignments.clp \
   --map-table metatracer_ref/metatracer_reference.map.tsv \ # Generated during metatracer reference-build
   --out annotations/sample.annotated.tsv \
   --proteins-out annotations/sample.proteins.faa \
-  --threads 8
+  --threads 8 \
+  filter/sample.filtered.assignments.clp
+
 ```
 
 Recommended:
