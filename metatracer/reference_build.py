@@ -181,8 +181,9 @@ def read_assembly_taxid_report(report_path: Path) -> Dict[str, int]:
         return mapping
 
     delim = _sniff_tsv_delim(report_path)
+    fmt = "TSV" if delim == "\t" else "CSV"
     logging.info(
-        f"Reading delimited report ({'TSV' if delim == '\t' else 'CSV'}): {report_path}")
+        f"Reading delimited report ({fmt}): {report_path}")
     opener = gzip.open if report_path.suffix == ".gz" else open
 
     with opener(report_path, "rt", encoding="utf-8", errors="replace", newline="") as f:

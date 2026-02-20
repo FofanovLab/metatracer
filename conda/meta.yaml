@@ -4,7 +4,7 @@ requirements:
     - pip
   run:
     - python
-    - mtsv-tools >=2.0.0
+    - mtsv-tools >=2.1.0
     - click
     - biopython
     - pysam
@@ -17,4 +17,4 @@ test:
   requires:
     - pytest
 run_constrained:
-  - mtsv-tools >=2.0.1
+  - mtsv-tools >=2.1.0
