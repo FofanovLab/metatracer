@@ -14,6 +14,7 @@ dependencies = [
   "mtsv-tools>=2.1.0",
 ]
 
+
 [project.optional-dependencies]
 test = [
   "pytest>=7",
@@ -22,3 +23,11 @@ test = [
 [project.scripts]
 metatracer = "metatracer.cli:main"
 
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["metatracer*"]
+exclude = ["data*", "conda*", "tests*"]
