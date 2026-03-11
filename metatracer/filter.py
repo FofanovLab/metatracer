@@ -22,6 +22,10 @@ Filtering:
      - Keep hits with edit <= (min_edit + edit_delta)
      - edit_delta defaults to 0 (keep only best-hit edit distance)
 
+  3) Absolute max edit-distance filter (per hit):
+     - If --max-edit-distance is provided, keep only hits with edit <= threshold
+     - Reads where all hits exceed threshold are removed
+
 Output:
   Same format as input.
   Reads with zero remaining hits are omitted.
@@ -30,7 +34,7 @@ Logging:
   Reports number of removed hits and removed reads at end.
 
 Example:
-  filter --input sample.clp --out sample.filtered.clp --exclude-taxa drop.txt --edit-delta 2 --log filter.log
+  filter --input sample.clp --out sample.filtered.clp --exclude-taxa drop.txt --max-edit-distance 3 --edit-delta 2 --log filter.log
 """
 
 from __future__ import annotations
@@ -159,6 +163,12 @@ def edit_delta_filter(hits: List[Hit], edit_delta: int) -> List[Hit]:
     return [h for h in hits if h.edit <= cutoff]
 
 
+def max_edit_distance_filter(hits: List[Hit], max_edit_distance: Optional[int]) -> List[Hit]:
+    if max_edit_distance is None:
+        return hits
+    return [h for h in hits if h.edit <= max_edit_distance]
+
+
 # ----------------------------
 # Main
 # ----------------------------
@@ -176,6 +186,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="File with taxids to exclude.")
     ap.add_argument("--edit-delta", type=int, default=0,
                     help="Keep hits with edit <= min_edit + edit_delta (default: 0).")
+    ap.add_argument("--max-edit-distance", type=int, default=None,
+                    help="Drop hits with edit > this threshold; reads with zero remaining hits are removed.")
     ap.add_argument("--log", default=None, help="Log file (default: stderr).")
     ap.add_argument("--verbose", action="store_true", help="Debug logging.")
     args = ap.parse_args(argv)
@@ -188,6 +200,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         raise SystemExit(f"Input not found: {in_path}")
     if args.edit_delta < 0:
         raise SystemExit("--edit-delta must be >= 0")
+    if args.max_edit_distance is not None and args.max_edit_distance < 0:
+        raise SystemExit("--max-edit-distance must be >= 0")
 
     include = load_taxa_file(args.include_taxa)
     exclude = load_taxa_file(args.exclude_taxa)
@@ -197,6 +211,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     if exclude is not None:
         logging.info("Loaded exclude taxa: %d", len(exclude))
     logging.info("edit_delta = %d", args.edit_delta)
+    logging.info("max_edit_distance = %s",
+                 args.max_edit_distance if args.max_edit_distance is not None else "none")
 
     removed_hits = 0
     removed_reads = 0
@@ -238,7 +254,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             # 1) taxa include/exclude
             parsed = taxa_filter(parsed, include=include, exclude=exclude)
 
-            # 2) edit_delta per read
+            # 2) absolute max edit-distance
+            parsed = max_edit_distance_filter(
+                parsed, max_edit_distance=args.max_edit_distance)
+
+            # 3) edit_delta per read
             parsed = edit_delta_filter(parsed, edit_delta=args.edit_delta)
 
             if not parsed:

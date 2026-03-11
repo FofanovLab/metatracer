@@ -432,6 +432,8 @@ def reference_build(
 @click.option("--exclude-taxa", default=None, help="File with taxids to exclude.")
 @click.option("--edit-delta", type=int, default=0, show_default=True,
               help="Keep hits with edit <= min_edit + edit_delta.")
+@click.option("--max-edit-distance", type=int, default=None,
+              help="Drop hits with edit > this threshold before edit-delta filtering.")
 @click.option("--log", default=None, help="Log file (default: stderr).")
 @click.option("--verbose", is_flag=True, help="Debug logging.")
 def filter_cmd(
@@ -440,6 +442,7 @@ def filter_cmd(
     include_taxa: Optional[str],
     exclude_taxa: Optional[str],
     edit_delta: int,
+    max_edit_distance: Optional[int],
     log: Optional[str],
     verbose: bool,
 ) -> None:
@@ -450,6 +453,8 @@ def filter_cmd(
 
     argv: List[str] = ["--input", input_path, "--out",
                        out_path, "--edit-delta", str(edit_delta)]
+    if max_edit_distance is not None:
+        argv += ["--max-edit-distance", str(max_edit_distance)]
     if include_taxa:
         argv += ["--include-taxa", include_taxa]
     if exclude_taxa:
