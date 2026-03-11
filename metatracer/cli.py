@@ -378,7 +378,8 @@ def extract_reads_cmd(
 @click.option("--data-dir", required=True, help="Base dir containing assembly subdirs (GCF_*/).")
 @click.option("--report", required=True, help="Datasets report mapping assembly -> taxid.")
 @click.option("--out-dir", required=True, help="Output directory for chunks + mapping + summary.")
-@click.option("--max-size-mb", type=int, required=True, help="Max size per chunk FASTA in MB.")
+@click.option("--max-size-mb", type=int, default=10000, show_default=True, help="Max size per chunk FASTA in MB.")
+@click.option("--mapping-only", is_flag=True, help="Skip FASTA chunk generation and regenerate mapping + summary only.")
 @click.option("--map-out", default=None, help="Output mapping TSV path.")
 @click.option("--summary-out", default=None, help="Output summary path.")
 @click.option("--index-gff", is_flag=True, help="bgzip+tabix index GFFs as discovered.")
@@ -390,6 +391,7 @@ def reference_build(
     report: str,
     out_dir: str,
     max_size_mb: int,
+    mapping_only: bool,
     map_out: Optional[str],
     summary_out: Optional[str],
     index_gff: bool,
@@ -412,6 +414,8 @@ def reference_build(
         argv += ["--map-out", map_out]
     if summary_out:
         argv += ["--summary-out", summary_out]
+    if mapping_only:
+        argv.append("--mapping-only")
     if index_gff:
         argv.append("--index-gff")
     if force_reindex:

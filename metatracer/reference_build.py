@@ -40,8 +40,7 @@ Outputs
 
 2) Mapping TSV (default: --out-dir/metatracer_reference.map.tsv) with columns (ORDER MATTERS):
      accession_key, Assembly, Taxid, Accession, Contig Accession, Description, GFF, ProteinFasta
-
-   NOTE: Taxid is immediately after Assembly (as requested).
+    - GFF and ProteinFasta are paths to the corresponding files for the assembly, or "NA" if not found.
 
 3) Summary text (default: --out-dir/metatracer_reference.summary.txt)
    Includes:
@@ -317,11 +316,12 @@ def build_reference(
     summary_path: Path,
     index_gff: bool,
     force_reindex: bool,
+    mapping_only: bool,
 ) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     max_bytes = int(max_size_mb) * 1024 * 1024
-    if max_bytes <= 0:
+    if not mapping_only and max_bytes <= 0:
         raise SystemExit("--max-size-mb must be > 0")
 
     asm_to_taxid = read_assembly_taxid_report(report_path)
@@ -346,10 +346,14 @@ def build_reference(
     assemblies_per_taxid = Counter()
 
     chunk_idx = 0
-    chunk_path = out_dir / f"metatracer_reference.chunk.{chunk_idx}.fasta"
-    fasta_out = open(chunk_path, "wt", encoding="utf-8", newline="\n")
+    chunks_written = 0
+    fasta_out = None
     chunk_bytes = 0
     wrote_any_to_chunk = False
+    if not mapping_only:
+        chunk_path = out_dir / f"metatracer_reference.chunk.{chunk_idx}.fasta"
+        fasta_out = open(chunk_path, "wt", encoding="utf-8", newline="\n")
+        chunks_written = 1
 
     accession_key = 1  # unique across ALL sequences
 
@@ -400,22 +404,25 @@ def build_reference(
                         new_header = f">{accession_key}-{taxid}"
                         seq = str(record.seq)
 
-                        rec_bytes = fasta_record_bytes(
-                            new_header, seq, wrap=60)
-                        if wrote_any_to_chunk and (chunk_bytes + rec_bytes > max_bytes):
-                            fasta_out.close()
-                            chunk_idx += 1
-                            chunk_path = out_dir / \
-                                f"metatracer_reference.chunk.{chunk_idx}.fasta"
-                            fasta_out = open(chunk_path, "wt",
-                                             encoding="utf-8", newline="\n")
-                            chunk_bytes = 0
-                            wrote_any_to_chunk = False
-                            logging.info(f"Started new chunk: {chunk_path}")
+                        if not mapping_only:
+                            rec_bytes = fasta_record_bytes(
+                                new_header, seq, wrap=60)
+                            if wrote_any_to_chunk and (chunk_bytes + rec_bytes > max_bytes):
+                                fasta_out.close()
+                                chunk_idx += 1
+                                chunk_path = out_dir / \
+                                    f"metatracer_reference.chunk.{chunk_idx}.fasta"
+                                fasta_out = open(chunk_path, "wt",
+                                                 encoding="utf-8", newline="\n")
+                                chunks_written += 1
+                                chunk_bytes = 0
+                                wrote_any_to_chunk = False
+                                logging.info(f"Started new chunk: {chunk_path}")
 
-                        write_fasta_record(fasta_out, new_header, seq, wrap=60)
-                        chunk_bytes += rec_bytes
-                        wrote_any_to_chunk = True
+                            write_fasta_record(
+                                fasta_out, new_header, seq, wrap=60)
+                            chunk_bytes += rec_bytes
+                            wrote_any_to_chunk = True
 
                         map_writer.writerow({
                             "seqid": accession_key,
@@ -435,7 +442,8 @@ def build_reference(
 
         finally:
             try:
-                fasta_out.close()
+                if fasta_out is not None:
+                    fasta_out.close()
             except Exception:
                 pass
 
@@ -449,8 +457,9 @@ def build_reference(
         s.write(f"Assemblies processed: {assemblies_processed:,}\n")
         s.write(f"Unique taxa:          {len(taxa_seen):,}\n")
         s.write(f"Total sequences:      {accession_key - 1:,}\n")
-        s.write(f"Chunk max size (MB):  {max_size_mb:,}\n")
-        s.write(f"Chunks written:       {chunk_idx + 1:,}\n")
+        s.write(
+            f"Chunk max size (MB):  {'N/A (mapping-only mode)' if mapping_only else f'{max_size_mb:,}'}\n")
+        s.write(f"Chunks written:       {chunks_written:,}\n")
         s.write(f"GFF indexing enabled: {index_gff}\n\n")
 
         s.write("Assemblies per taxid:\n")
@@ -459,8 +468,11 @@ def build_reference(
 
     logging.info(f"Wrote mapping TSV: {map_tsv_path}")
     logging.info(f"Wrote summary:     {summary_path}")
-    logging.info(
-        f"Wrote chunks:      metatracer_reference.chunk.0.fasta..chunk.{chunk_idx}.fasta in {out_dir}")
+    if mapping_only:
+        logging.info("Skipped FASTA chunk generation (--mapping-only enabled)")
+    else:
+        logging.info(
+            f"Wrote chunks:      metatracer_reference.chunk.0.fasta..chunk.{chunk_idx}.fasta in {out_dir}")
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -472,8 +484,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="Datasets report mapping assembly -> taxid (TSV/CSV or JSONL).")
     ap.add_argument("--out-dir", required=True,
                     help="Output directory for chunks + mapping + summary.")
-    ap.add_argument("--max-size-mb", type=int, required=True, default=10000,
+    ap.add_argument("--max-size-mb", type=int, default=10000,
                     help="Max size per chunk FASTA in MB (records never split).")
+    ap.add_argument("--mapping-only", action="store_true",
+                    help="Skip FASTA chunk generation and only regenerate mapping + summary outputs.")
     ap.add_argument("--map-out", default=None,
                     help="Output mapping TSV (default: <out-dir>/metatracer_reference.map.tsv).")
     ap.add_argument("--summary-out", default=None,
@@ -511,6 +525,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         summary_path=summary_out,
         index_gff=args.index_gff,
         force_reindex=args.force_reindex,
+        mapping_only=args.mapping_only,
     )
     return 0
 
