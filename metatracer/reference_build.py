@@ -108,6 +108,19 @@ REPORT_COL_CANDIDATES = {
 }
 
 
+def normalize_assembly_accession(value: str) -> str:
+    return str(value).strip().upper()
+
+
+def unversioned_assembly_accession(value: str) -> str:
+    acc = normalize_assembly_accession(value)
+    if "." in acc:
+        left, right = acc.rsplit(".", 1)
+        if right.isdigit():
+            return left
+    return acc
+
+
 def _sniff_tsv_delim(path: Path) -> str:
     opener = gzip.open if path.suffix == ".gz" else open
     with opener(path, "rt", encoding="utf-8", errors="replace") as f:
@@ -139,8 +152,14 @@ def _extract_from_json_obj(obj: dict) -> Tuple[Optional[str], Optional[int]]:
     if tax is None and isinstance(obj.get("organism"), dict):
         tax = _first_present(obj["organism"], REPORT_COL_CANDIDATES["taxid"])
 
+    # NCBI Datasets genome report objects often nest taxid under assembly_info.organism
+    if tax is None and isinstance(obj.get("assembly_info"), dict):
+        ai = obj["assembly_info"]
+        if isinstance(ai.get("organism"), dict):
+            tax = _first_present(ai["organism"], REPORT_COL_CANDIDATES["taxid"])
+
     taxid = int(tax) if tax is not None and tax.isdigit() else None
-    return asm, taxid
+    return normalize_assembly_accession(asm) if asm else None, taxid
 
 
 def read_assembly_taxid_report(report_path: Path) -> Dict[str, int]:
@@ -164,7 +183,7 @@ def read_assembly_taxid_report(report_path: Path) -> Dict[str, int]:
                 if isinstance(obj, dict):
                     asm, taxid = _extract_from_json_obj(obj)
                     if asm and taxid is not None:
-                        mapping[asm] = taxid
+                        mapping[normalize_assembly_accession(asm)] = taxid
 
         if bad_lines:
             logging.warning(
@@ -184,11 +203,25 @@ def read_assembly_taxid_report(report_path: Path) -> Dict[str, int]:
                 if isinstance(item, dict):
                     asm, taxid = _extract_from_json_obj(item)
                     if asm and taxid is not None:
-                        mapping[asm] = taxid
+                        mapping[normalize_assembly_accession(asm)] = taxid
         elif isinstance(obj, dict):
-            asm, taxid = _extract_from_json_obj(obj)
-            if asm and taxid is not None:
-                mapping[asm] = taxid
+            # Common datasets shape: {"reports":[{...}, {...}], "total_count": N}
+            if isinstance(obj.get("reports"), list):
+                for item in obj["reports"]:
+                    if isinstance(item, dict):
+                        asm, taxid = _extract_from_json_obj(item)
+                        if asm and taxid is not None:
+                            mapping[normalize_assembly_accession(asm)] = taxid
+            elif isinstance(obj.get("assemblies"), list):
+                for item in obj["assemblies"]:
+                    if isinstance(item, dict):
+                        asm, taxid = _extract_from_json_obj(item)
+                        if asm and taxid is not None:
+                            mapping[normalize_assembly_accession(asm)] = taxid
+            else:
+                asm, taxid = _extract_from_json_obj(obj)
+                if asm and taxid is not None:
+                    mapping[normalize_assembly_accession(asm)] = taxid
         return mapping
 
     delim = _sniff_tsv_delim(report_path)
@@ -222,7 +255,7 @@ def read_assembly_taxid_report(report_path: Path) -> Dict[str, int]:
             if not asm or not tax:
                 continue
             try:
-                mapping[str(asm)] = int(tax)
+                mapping[normalize_assembly_accession(asm)] = int(tax)
             except ValueError:
                 continue
         return mapping
@@ -252,6 +285,57 @@ def locate_assembly_files(assembly_dir: Path) -> Tuple[Optional[str], Optional[s
     protein = _find_single([str(assembly_dir / "*protein.faa*"),
                            str(assembly_dir / "protein.faa*"), str(assembly_dir / "*.faa*")])
     return genomic_fna, gff, protein
+
+
+def build_assembly_dir_index(data_dir: Path) -> Tuple[Dict[str, str], Dict[str, List[str]]]:
+    full_to_dir: Dict[str, str] = {}
+    base_to_dirs: Dict[str, List[str]] = {}
+    for p in data_dir.iterdir():
+        if not p.is_dir():
+            continue
+        full = normalize_assembly_accession(p.name)
+        base = unversioned_assembly_accession(full)
+        full_to_dir[full] = p.name
+        base_to_dirs.setdefault(base, []).append(p.name)
+    return full_to_dir, base_to_dirs
+
+
+def resolve_assembly_dir_name(
+    assembly: str,
+    full_to_dir: Dict[str, str],
+    base_to_dirs: Dict[str, List[str]],
+) -> Optional[str]:
+    full = normalize_assembly_accession(assembly)
+    if full in full_to_dir:
+        return full_to_dir[full]
+
+    base = unversioned_assembly_accession(full)
+    candidates = base_to_dirs.get(base, [])
+    if not candidates:
+        return None
+    if len(candidates) == 1:
+        return candidates[0]
+
+    if "." in full:
+        _, suffix = full.rsplit(".", 1)
+        if suffix.isdigit():
+            target = int(suffix)
+            best = None
+            best_ver = -1
+            for c in candidates:
+                c_full = normalize_assembly_accession(c)
+                ver = -1
+                if "." in c_full:
+                    _, c_suffix = c_full.rsplit(".", 1)
+                    if c_suffix.isdigit():
+                        ver = int(c_suffix)
+                if ver <= target and ver > best_ver:
+                    best = c
+                    best_ver = ver
+            if best is not None:
+                return best
+
+    return sorted(candidates)[0]
 
 
 # ----------------------------
@@ -342,6 +426,7 @@ def build_reference(
             f"No assembly->taxid mappings found in report: {report_path}")
 
     logging.info(f"Report mappings loaded: {len(asm_to_taxid):,} assemblies")
+    full_to_dir, base_to_dirs = build_assembly_dir_index(data_dir)
 
     map_fields = [
         "seqid",
@@ -377,8 +462,14 @@ def build_reference(
         try:
             total = len(asm_to_taxid)
             for i, (assembly, taxid) in enumerate(asm_to_taxid.items(), start=1):
-                # Assembly accession is the directory name under --data-dir
-                assembly_dir = data_dir / assembly
+                assembly_dir_name = resolve_assembly_dir_name(
+                    assembly, full_to_dir, base_to_dirs
+                )
+                if assembly_dir_name is None:
+                    logging.warning(
+                        f"[skip] Assembly dir not found under --data-dir for report accession: {assembly}")
+                    continue
+                assembly_dir = data_dir / assembly_dir_name
                 if not assembly_dir.exists():
                     logging.warning(
                         f"[skip] Assembly dir not found under --data-dir: {assembly_dir}")
@@ -400,7 +491,7 @@ def build_reference(
                         gff_path, force=force_reindex)
 
                 logging.info(
-                    f"[{i:,}/{total:,}] Assembly={assembly} taxid={taxid} fna={os.path.basename(genomic_fna)}")
+                    f"[{i:,}/{total:,}] Assembly={assembly} taxid={taxid} dir={assembly_dir_name} fna={os.path.basename(genomic_fna)}")
 
                 found_any_contig = False
                 opener = gzip.open if str(
@@ -438,7 +529,7 @@ def build_reference(
 
                         map_writer.writerow({
                             "seqid": accession_key,
-                            "assembly": assembly,
+                            "assembly": assembly_dir_name,
                             "taxid": taxid,  # immediately after Assembly
                             "header": contig_accession,
                             "description": description,
