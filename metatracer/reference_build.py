@@ -60,6 +60,7 @@ Dependencies
 ------------
 - biopython
 - pysam (required ONLY if --index-gff is used)
+- ete3 (required for taxid rollup to species-or-higher)
 """
 
 from __future__ import annotations
@@ -106,6 +107,16 @@ REPORT_COL_CANDIDATES = {
     "assembly": ["assembly_accession", "assemblyAccession", "assembly_accession_version", "accession"],
     "taxid": ["tax_id", "taxid", "organism_tax_id", "organism_taxid"],
 }
+
+ROLLUP_RANK_ORDER = [
+    "species",
+    "genus",
+    "family",
+    "order",
+    "class",
+    "phylum",
+    "superkingdom",
+]
 
 
 def normalize_assembly_accession(value: str) -> str:
@@ -294,6 +305,59 @@ def read_assembly_taxid_report(report_path: Path) -> Dict[str, int]:
         return mapping
 
 
+def build_species_or_higher_rollup(
+    taxids: Iterable[int],
+) -> Tuple[Dict[int, int], Dict[int, str]]:
+    try:
+        from ete3 import NCBITaxa
+    except Exception as e:
+        raise SystemExit(
+            "ete3 is required for taxid rollup. Install with: pip install ete3"
+        ) from e
+
+    unique_taxids = sorted({int(t) for t in taxids if t is not None})
+    if not unique_taxids:
+        return {}, {}
+
+    ncbi = NCBITaxa()
+
+    lineages: Dict[int, List[int]] = {}
+    lineage_taxids = set()
+    for taxid in unique_taxids:
+        try:
+            lineage = ncbi.get_lineage(taxid) or [taxid]
+        except Exception:
+            lineage = [taxid]
+        lineages[taxid] = lineage
+        lineage_taxids.update(lineage)
+
+    rank_by_taxid = ncbi.get_rank(list(lineage_taxids)) if lineage_taxids else {}
+
+    rollup_taxid_by_taxid: Dict[int, int] = {}
+    rollup_rank_by_taxid: Dict[int, str] = {}
+    for taxid in unique_taxids:
+        lineage = lineages[taxid]
+        best_by_rank: Dict[str, int] = {}
+        for lin_taxid in lineage:
+            rank = rank_by_taxid.get(lin_taxid, "")
+            if rank in ROLLUP_RANK_ORDER:
+                best_by_rank[rank] = lin_taxid
+
+        rolled_taxid = taxid
+        rolled_rank = rank_by_taxid.get(taxid, "unknown")
+        for rank in ROLLUP_RANK_ORDER:
+            candidate = best_by_rank.get(rank)
+            if candidate is not None:
+                rolled_taxid = candidate
+                rolled_rank = rank
+                break
+
+        rollup_taxid_by_taxid[taxid] = rolled_taxid
+        rollup_rank_by_taxid[taxid] = rolled_rank
+
+    return rollup_taxid_by_taxid, rollup_rank_by_taxid
+
+
 # ----------------------------
 # File discovery per assembly
 # ----------------------------
@@ -459,6 +523,22 @@ def build_reference(
             f"No assembly->taxid mappings found in report: {report_path}")
 
     logging.info(f"Report mappings loaded: {len(asm_to_taxid):,} assemblies")
+    rollup_by_taxid, rollup_rank_by_taxid = build_species_or_higher_rollup(
+        asm_to_taxid.values()
+    )
+    asm_to_taxid = {
+        asm: rollup_by_taxid.get(taxid, taxid) for asm, taxid in asm_to_taxid.items()
+    }
+    rolled_rank_by_taxid: Dict[int, str] = {}
+    for original_taxid, rolled_taxid in rollup_by_taxid.items():
+        rolled_rank_by_taxid.setdefault(
+            rolled_taxid, rollup_rank_by_taxid.get(original_taxid, "unknown")
+        )
+    logging.info(
+        "Rolled up %d unique taxids to species-or-higher (%d unique after rollup)",
+        len(rollup_by_taxid),
+        len(set(asm_to_taxid.values())),
+    )
     full_to_dir, base_to_dirs = build_assembly_dir_index(data_dir)
 
     map_fields = [
@@ -598,9 +678,12 @@ def build_reference(
         s.write(f"Chunks written:       {chunks_written:,}\n")
         s.write(f"GFF indexing enabled: {index_gff}\n\n")
 
-        s.write("Assemblies per taxid:\n")
+        s.write("Assemblies per taxid (rolled to species-or-higher):\n")
+        s.write("  taxid\trank\tassemblies\n")
         for taxid, cnt in assemblies_per_taxid.most_common():
-            s.write(f"  {taxid}\t{cnt}\n")
+            s.write(
+                f"  {taxid}\t{rolled_rank_by_taxid.get(taxid, 'unknown')}\t{cnt}\n"
+            )
 
     logging.info(f"Wrote mapping TSV: {map_tsv_path}")
     logging.info(f"Wrote summary:     {summary_path}")
