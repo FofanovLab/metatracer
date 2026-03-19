@@ -257,5 +257,22 @@ Recommended:
 * Run annotation on filtered assignments to reduce runtime and output size.
 * Keep `metatracer_reference.map.tsv` produced during `reference-build`; it contains the paths needed to resolve assemblies → GFF/protein resources.
 
----
+Example `sample.annotated.tsv` output:
 
+```tsv
+read_id	taxid	taxon_name	accession_key	contig_pos	edit	assembly	contig	gene_id	locus_tag	product	protein_id	strand	cds_start	cds_end
+M01234:56:000000000-ABCD1:1:1101:10234:1056	562	Escherichia coli	18422	NC_000913.3:345671	2	GCF_000005845.2	NC_000913.3	b0002	thrA	aspartokinase/homoserine dehydrogenase	NP_414543.1	+	337	2799
+M01234:56:000000000-ABCD1:1:1101:10234:1056	562	Escherichia coli	18422	NC_000913.3:345872	2	GCF_000005845.2	NC_000913.3	b0002	thrA	aspartokinase/homoserine dehydrogenase	NP_414543.1	+	337	2799
+M01234:56:000000000-ABCD1:1:1101:9988:1120	1280	Staphylococcus aureus	23107	NZ_CP000253.1:112934	1	GCF_000013425.1	NZ_CP000253.1	SAUSA300_0102	SAUSA300_0102	putative membrane protein	WP_000123456.1	-	112801	113220
+```
+
+Example `sample.proteins.faa` output (unique protein sequences referenced by annotated hits):
+
+```fasta
+>NP_414543.1 aspartokinase/homoserine dehydrogenase [Escherichia coli]
+MNNR...KQ
+>WP_000123456.1 putative membrane protein [Staphylococcus aureus]
+MFKK...LL
+```
+
+---

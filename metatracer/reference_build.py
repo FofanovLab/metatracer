@@ -145,38 +145,50 @@ def _extract_from_json_obj(obj: dict) -> Tuple[Optional[str], Optional[int]]:
 
 def read_assembly_taxid_report(report_path: Path) -> Dict[str, int]:
     name = report_path.name.lower()
-    if name.endswith(".jsonl") or name.endswith(".jsonl.gz") or name.endswith(".json") or name.endswith(".json.gz"):
-        logging.info(f"Reading JSON/JSONL report: {report_path}")
+    if name.endswith(".jsonl") or name.endswith(".jsonl.gz"):
+        logging.info(f"Reading JSONL report: {report_path}")
         opener = gzip.open if report_path.suffix == ".gz" else open
         mapping: Dict[str, int] = {}
+        bad_lines = 0
 
         with opener(report_path, "rt", encoding="utf-8", errors="replace") as f:
-            for line in f:
+            for line_no, line in enumerate(f, start=1):
                 line = line.strip()
                 if not line:
                     continue
                 try:
                     obj = json.loads(line)
                 except json.JSONDecodeError:
-                    f.seek(0)
-                    obj = json.load(f)
-                    if isinstance(obj, list):
-                        for item in obj:
-                            if isinstance(item, dict):
-                                asm, taxid = _extract_from_json_obj(item)
-                                if asm and taxid is not None:
-                                    mapping[asm] = taxid
-                    elif isinstance(obj, dict):
-                        asm, taxid = _extract_from_json_obj(obj)
-                        if asm and taxid is not None:
-                            mapping[asm] = taxid
-                    return mapping
-
+                    bad_lines += 1
+                    continue
                 if isinstance(obj, dict):
                     asm, taxid = _extract_from_json_obj(obj)
                     if asm and taxid is not None:
                         mapping[asm] = taxid
 
+        if bad_lines:
+            logging.warning(
+                "Skipped %d malformed JSONL line(s) in %s", bad_lines, report_path
+            )
+        return mapping
+
+    if name.endswith(".json") or name.endswith(".json.gz"):
+        logging.info(f"Reading JSON report: {report_path}")
+        opener = gzip.open if report_path.suffix == ".gz" else open
+        mapping: Dict[str, int] = {}
+        with opener(report_path, "rt", encoding="utf-8", errors="replace") as f:
+            obj = json.load(f)
+
+        if isinstance(obj, list):
+            for item in obj:
+                if isinstance(item, dict):
+                    asm, taxid = _extract_from_json_obj(item)
+                    if asm and taxid is not None:
+                        mapping[asm] = taxid
+        elif isinstance(obj, dict):
+            asm, taxid = _extract_from_json_obj(obj)
+            if asm and taxid is not None:
+                mapping[asm] = taxid
         return mapping
 
     delim = _sniff_tsv_delim(report_path)

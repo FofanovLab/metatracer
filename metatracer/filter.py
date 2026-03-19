@@ -216,6 +216,11 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     removed_hits = 0
     removed_reads = 0
+    removed_reads_no_hits_input = 0
+    removed_reads_unparsable = 0
+    removed_reads_taxa = 0
+    removed_reads_max_edit = 0
+    removed_reads_edit_delta = 0
     kept_reads = 0
     kept_hits = 0
 
@@ -231,6 +236,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             if not read_id or not hit_strs:
                 # no hits -> skip
                 removed_reads += 1
+                removed_reads_no_hits_input += 1
                 continue
 
             parsed: List[Hit] = []
@@ -247,22 +253,34 @@ def main(argv: Optional[List[str]] = None) -> int:
 
             if not parsed:
                 removed_reads += 1
+                removed_reads_unparsable += 1
                 continue
 
             original_n = len(parsed)
 
             # 1) taxa include/exclude
-            parsed = taxa_filter(parsed, include=include, exclude=exclude)
+            parsed_taxa = taxa_filter(parsed, include=include, exclude=exclude)
+            if not parsed_taxa:
+                removed_reads += 1
+                removed_reads_taxa += 1
+                removed_hits += original_n
+                continue
 
             # 2) absolute max edit-distance
-            parsed = max_edit_distance_filter(
-                parsed, max_edit_distance=args.max_edit_distance)
+            parsed_max_edit = max_edit_distance_filter(
+                parsed_taxa, max_edit_distance=args.max_edit_distance)
+            if not parsed_max_edit:
+                removed_reads += 1
+                removed_reads_max_edit += 1
+                removed_hits += original_n
+                continue
 
             # 3) edit_delta per read
-            parsed = edit_delta_filter(parsed, edit_delta=args.edit_delta)
+            parsed = edit_delta_filter(parsed_max_edit, edit_delta=args.edit_delta)
 
             if not parsed:
                 removed_reads += 1
+                removed_reads_edit_delta += 1
                 removed_hits += original_n
                 continue
 
@@ -279,6 +297,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     logging.info("Kept reads:        %d", kept_reads)
     logging.info("Kept hits:         %d", kept_hits)
     logging.info("Removed reads:     %d", removed_reads)
+    logging.info("  - no hits input: %d", removed_reads_no_hits_input)
+    logging.info("  - unparsable:    %d", removed_reads_unparsable)
+    logging.info("  - taxa filter:   %d", removed_reads_taxa)
+    logging.info("  - max edit:      %d", removed_reads_max_edit)
+    logging.info("  - edit delta:    %d", removed_reads_edit_delta)
     logging.info("Removed hits:      %d", removed_hits)
 
     return 0
