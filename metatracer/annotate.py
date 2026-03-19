@@ -185,6 +185,26 @@ def load_mapping_table(path: str) -> Tuple[Dict[str, MappingRow], Dict[str, Mapp
     return by_key, by_asm
 
 
+def _path_score(path: str, expect_tabix: bool = False) -> int:
+    p = (path or "").strip()
+    if not p or p.upper() == "NA":
+        return 0
+    score = 1
+    if os.path.exists(p):
+        score += 3
+        if expect_tabix and os.path.exists(p + ".tbi"):
+            score += 3
+    if expect_tabix and p.endswith(".gz"):
+        score += 1
+    return score
+
+
+def _prefer_mapping_row(prev: MappingRow, new: MappingRow) -> MappingRow:
+    prev_score = _path_score(prev.gff_path, expect_tabix=True) + _path_score(prev.protein_fa_path)
+    new_score = _path_score(new.gff_path, expect_tabix=True) + _path_score(new.protein_fa_path)
+    return new if new_score >= prev_score else prev
+
+
 def load_mapping_tables(paths: List[str]) -> Tuple[Dict[str, MappingRow], Dict[str, MappingRow]]:
     by_key: Dict[str, MappingRow] = {}
     by_asm: Dict[str, MappingRow] = {}
@@ -198,15 +218,19 @@ def load_mapping_tables(paths: List[str]) -> Tuple[Dict[str, MappingRow], Dict[s
                     k,
                     path,
                 )
-            by_key[k] = v
+                by_key[k] = _prefer_mapping_row(by_key[k], v)
+            else:
+                by_key[k] = v
         for k, v in sub_by_asm.items():
             if k in by_asm:
                 logging.warning(
-                    "Duplicate assembly '%s' in mapping tables; keeping last from %s",
+                    "Duplicate assembly '%s' in mapping tables; choosing best resource paths (latest from %s if tied)",
                     k,
                     path,
                 )
-            by_asm[k] = v
+                by_asm[k] = _prefer_mapping_row(by_asm[k], v)
+            else:
+                by_asm[k] = v
 
     return by_key, by_asm
 
@@ -317,9 +341,14 @@ class IntervalGFFAnnotator:
                 raise SystemExit(
                     f"Assembly '{assembly}' not found in mapping table.")
             gff_path = m.gff_path
+            if gff_path and not gff_path.endswith(".gz") and os.path.exists(gff_path + ".gz"):
+                gff_path = gff_path + ".gz"
             if not os.path.exists(gff_path):
                 raise SystemExit(
                     f"GFF path does not exist for assembly '{assembly}': {gff_path}")
+            if not os.path.exists(gff_path + ".tbi"):
+                raise SystemExit(
+                    f"GFF index not found for assembly '{assembly}': {gff_path}.tbi")
             self._tabix[assembly] = self._pysam.TabixFile(gff_path)
         return self._tabix[assembly]
 
