@@ -80,9 +80,10 @@ into chunks ready for index building. The size of the chunks will play a role in
 
   * chunked FASTA files for indexing (headers rewritten to `>{accession_key}-{taxid}`)
   * a mapping TSV required for downstream annotation
-  * a summary report (assemblies processed, taxa counts, etc.)
+  * a summary report (assemblies processed, taxa counts, taxonomic level per rolled taxid)
   * (optional) bgzip + tabix indexing for GFF files (indexed GFF files are required at annotation step)
 
+During `reference-build`, taxids from the genome report are rolled up to the **species** rank when available, or to the nearest higher rank (`genus`, `family`, `order`, `class`, `phylum`, `superkingdom`) when species is not available. This rollup uses `ete3`. 
 Example:
 
 ```bash
@@ -101,6 +102,12 @@ Outputs:
 * `metatracer_ref/metatracer_reference.chunk.0.fasta`, `.1.fasta`, ...
 * `metatracer_ref/metatracer_reference.map.tsv`
 * `metatracer_ref/metatracer_reference.summary.txt`
+
+Summary taxid section format:
+
+* `taxid`
+* `rank` (the rolled level used for that taxid)
+* `assemblies` (count of assemblies mapped to that rolled taxid)
 
 The mapping TSV includes:
 
