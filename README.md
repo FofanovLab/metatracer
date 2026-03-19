@@ -245,7 +245,7 @@ Notes:
 
 ### 2.5 Annotate filtered assignments (`metatracer annotate`)
 
-`metatracer annotate` expands each read hit to a tabular format and (unless `--taxa-only` is used) maps hit positions to CDS/protein annotations using the reference mapping table and indexed GFFs. Taxa only can be used for taxonomic assignments, and simply translates taxids into organism names. 
+`metatracer annotate` expands each read hit to a tabular format and (unless `--taxa-only` is used) maps hit positions to CDS/protein annotations using the reference mapping table and indexed GFFs. `--taxa-only` just translates taxids into organism names. 
 
 Example:
 
