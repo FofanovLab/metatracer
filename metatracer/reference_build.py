@@ -162,6 +162,22 @@ def _extract_from_json_obj(obj: dict) -> Tuple[Optional[str], Optional[int]]:
     return normalize_assembly_accession(asm) if asm else None, taxid
 
 
+def _add_from_json_obj(obj: dict, mapping: Dict[str, int]) -> None:
+    if not isinstance(obj, dict):
+        return
+    if isinstance(obj.get("reports"), list):
+        for item in obj["reports"]:
+            _add_from_json_obj(item, mapping)
+        return
+    if isinstance(obj.get("assemblies"), list):
+        for item in obj["assemblies"]:
+            _add_from_json_obj(item, mapping)
+        return
+    asm, taxid = _extract_from_json_obj(obj)
+    if asm and taxid is not None:
+        mapping[normalize_assembly_accession(asm)] = taxid
+
+
 def read_assembly_taxid_report(report_path: Path) -> Dict[str, int]:
     name = report_path.name.lower()
     if name.endswith(".jsonl") or name.endswith(".jsonl.gz"):
@@ -196,32 +212,49 @@ def read_assembly_taxid_report(report_path: Path) -> Dict[str, int]:
         opener = gzip.open if report_path.suffix == ".gz" else open
         mapping: Dict[str, int] = {}
         with opener(report_path, "rt", encoding="utf-8", errors="replace") as f:
-            obj = json.load(f)
+            text = f.read()
 
-        if isinstance(obj, list):
-            for item in obj:
-                if isinstance(item, dict):
-                    asm, taxid = _extract_from_json_obj(item)
-                    if asm and taxid is not None:
-                        mapping[normalize_assembly_accession(asm)] = taxid
-        elif isinstance(obj, dict):
-            # Common datasets shape: {"reports":[{...}, {...}], "total_count": N}
-            if isinstance(obj.get("reports"), list):
-                for item in obj["reports"]:
-                    if isinstance(item, dict):
-                        asm, taxid = _extract_from_json_obj(item)
-                        if asm and taxid is not None:
-                            mapping[normalize_assembly_accession(asm)] = taxid
-            elif isinstance(obj.get("assemblies"), list):
-                for item in obj["assemblies"]:
-                    if isinstance(item, dict):
-                        asm, taxid = _extract_from_json_obj(item)
-                        if asm and taxid is not None:
-                            mapping[normalize_assembly_accession(asm)] = taxid
+        try:
+            obj = json.loads(text)
+            if isinstance(obj, list):
+                for item in obj:
+                    _add_from_json_obj(item, mapping)
             else:
-                asm, taxid = _extract_from_json_obj(obj)
-                if asm and taxid is not None:
-                    mapping[normalize_assembly_accession(asm)] = taxid
+                _add_from_json_obj(obj, mapping)
+        except json.JSONDecodeError as ex:
+            # Some reports are NDJSON/concatenated JSON objects despite .json extension.
+            if "Extra data" not in str(ex):
+                raise
+
+            decoder = json.JSONDecoder()
+            i = 0
+            n = len(text)
+            bad_chunks = 0
+            while i < n:
+                while i < n and text[i].isspace():
+                    i += 1
+                if i >= n:
+                    break
+                try:
+                    obj, j = decoder.raw_decode(text, i)
+                except json.JSONDecodeError:
+                    line_end = text.find("\n", i)
+                    if line_end == -1:
+                        break
+                    i = line_end + 1
+                    bad_chunks += 1
+                    continue
+                if isinstance(obj, list):
+                    for item in obj:
+                        _add_from_json_obj(item, mapping)
+                else:
+                    _add_from_json_obj(obj, mapping)
+                i = j
+
+            if bad_chunks:
+                logging.warning(
+                    "Skipped %d malformed JSON chunk(s) in %s", bad_chunks, report_path
+                )
         return mapping
 
     delim = _sniff_tsv_delim(report_path)
