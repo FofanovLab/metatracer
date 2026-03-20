@@ -132,6 +132,13 @@ def parse_hit(hit: str) -> Tuple[int, str, int, int]:
     raise ValueError(f"Unrecognized hit format: {hit}")
 
 
+def clean_path(value: str) -> str:
+    p = (value or "").strip()
+    if len(p) >= 2 and ((p[0] == "'" and p[-1] == "'") or (p[0] == '"' and p[-1] == '"')):
+        p = p[1:-1].strip()
+    return p
+
+
 # ----------------------------
 # Mapping table loading
 # ----------------------------
@@ -173,8 +180,8 @@ def load_mapping_table(path: str) -> Tuple[Dict[str, MappingRow], Dict[str, Mapp
                 assembly=row["assembly"],
                 accession=row["header"],
                 acc_desc=row["description"],
-                gff_path=row["gff"],
-                protein_fa_path=row["protein_fasta"],
+                gff_path=clean_path(row["gff"]),
+                protein_fa_path=clean_path(row["protein_fasta"]),
             )
             if m.seqid:
                 by_key[m.seqid] = m
@@ -345,6 +352,9 @@ class IntervalGFFAnnotator:
 
         gff_path = (mapped_gff_path or "").strip()
         if gff_path and gff_path.upper() != "NA":
+            # Accept either a GFF path or a colocated index path in the table.
+            if gff_path.endswith(".tbi"):
+                gff_path = gff_path[:-4]
             candidates.append(gff_path)
             if not gff_path.endswith(".gz"):
                 candidates.append(gff_path + ".gz")
@@ -352,6 +362,8 @@ class IntervalGFFAnnotator:
         if self.data_dir:
             base = os.path.join(self.data_dir, assembly)
             candidates.extend([
+                os.path.join(self.data_dir, f"{assembly}.gff.gz"),
+                os.path.join(self.data_dir, f"{assembly}.gff"),
                 os.path.join(base, "genomic.gff.gz"),
                 os.path.join(base, "genomic.gff"),
                 os.path.join(base, f"{assembly}_genomic.gff.gz"),
@@ -548,8 +560,7 @@ class ProteinSource:
             self._idx[assembly] = Fasta(
                 fa, as_raw=True, sequence_always_upper=False)
         else:
-            SeqIO = getattr(self._bio_seqio, "SeqIO")
-            self._idx[assembly] = SeqIO.index(fa, "fasta")
+            self._idx[assembly] = self._bio_seqio.index(fa, "fasta")
         return self._idx[assembly]
 
     def fetch(self, assembly: str, protein_id: str) -> Tuple[str, str]:
