@@ -388,11 +388,11 @@ class IntervalGFFAnnotator:
             return False
 
         for p in uniq_candidates:
-            if os.path.exists(p) and _has_local_tbi(p):
-                # If map points to .gff but .gff.gz has the colocated index, use .gz file.
-                if (not p.endswith(".gz")) and os.path.exists(p + ".gz") and os.path.exists(p + ".gz.tbi"):
-                    return p + ".gz"
-                return p
+            if not os.path.exists(p):
+                continue
+            ensured = self._ensure_gff_index(p)
+            if ensured is not None:
+                return ensured
 
         for p in uniq_candidates:
             if os.path.exists(p):
@@ -405,6 +405,38 @@ class IntervalGFFAnnotator:
             f"GFF path not found for assembly '{assembly}'. Checked mapping path '{mapped_gff_path}'"
             + (f" and fallback under data-dir '{self.data_dir}'." if self.data_dir else ".")
         )
+
+    def _ensure_gff_index(self, gff_path: str) -> Optional[str]:
+        """
+        Ensure tabix index exists; if missing, create it in place.
+        Returns resolved path to open with TabixFile, or None if indexing failed.
+        """
+        if gff_path.endswith(".gz"):
+            if os.path.exists(gff_path + ".tbi"):
+                return gff_path
+            try:
+                self._pysam.tabix_index(gff_path, preset="gff", force=False)
+            except Exception:
+                return None
+            return gff_path if os.path.exists(gff_path + ".tbi") else None
+
+        # Uncompressed GFF: bgzip + tabix, keep original file.
+        if os.path.exists(gff_path + ".tbi"):
+            return gff_path
+        gz = gff_path + ".gz"
+        if os.path.exists(gz) and os.path.exists(gz + ".tbi"):
+            return gz
+        try:
+            self._pysam.tabix_index(
+                gff_path, preset="gff", force=False, keep_original=True
+            )
+        except Exception:
+            return None
+        if os.path.exists(gz) and os.path.exists(gz + ".tbi"):
+            return gz
+        if os.path.exists(gff_path + ".tbi"):
+            return gff_path
+        return None
 
     def _get_tabix(self, assembly: str):
         if assembly not in self._tabix:
