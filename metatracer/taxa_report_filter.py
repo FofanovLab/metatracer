@@ -48,12 +48,65 @@ def parse_num(value: str) -> Optional[float]:
         return None
 
 
-def row_passes(row: Dict[str, str], mins: Dict[str, Optional[float]]) -> bool:
+def _derived_metrics(row: Dict[str, str]) -> Optional[Tuple[float, float, float]]:
+    only_hit = parse_num(row.get("only_hit", ""))
+    only_best = parse_num(row.get("only_best", ""))
+    tied_best = parse_num(row.get("tied_best", ""))
+    not_best = parse_num(row.get("not_best", ""))
+    total_reads = parse_num(row.get("total_reads", ""))
+
+    if None in (only_hit, only_best, tied_best, not_best, total_reads):
+        return None
+
+    strong = float(only_hit + only_best)
+    weak = float(tied_best + not_best)
+    if total_reads <= 0:
+        strong_fraction = 0.0
+    else:
+        strong_fraction = strong / float(total_reads)
+
+    if weak <= 0:
+        strong_vs_weak = float("inf") if strong > 0 else 0.0
+    else:
+        strong_vs_weak = strong / weak
+
+    return strong_fraction, strong, strong_vs_weak
+
+
+def row_passes(
+    row: Dict[str, str],
+    mins: Dict[str, Optional[float]],
+    min_strong_support_fraction: Optional[float],
+    min_strong_count: Optional[float],
+    min_strong_vs_weak_ratio: Optional[float],
+) -> bool:
     for col, cutoff in mins.items():
         if cutoff is None:
             continue
         val = parse_num(row.get(col, ""))
         if val is None or val < cutoff:
+            return False
+
+    if (
+        min_strong_support_fraction is not None
+        or min_strong_count is not None
+        or min_strong_vs_weak_ratio is not None
+    ):
+        dm = _derived_metrics(row)
+        if dm is None:
+            return False
+        strong_fraction, strong_count, strong_vs_weak = dm
+        if (
+            min_strong_support_fraction is not None
+            and strong_fraction < min_strong_support_fraction
+        ):
+            return False
+        if min_strong_count is not None and strong_count < min_strong_count:
+            return False
+        if (
+            min_strong_vs_weak_ratio is not None
+            and strong_vs_weak < min_strong_vs_weak_ratio
+        ):
             return False
     return True
 
@@ -78,6 +131,24 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--min-not-best-pct", type=float, default=None, help="Minimum not_best_pct.")
     ap.add_argument("--min-total-reads", type=float, default=None, help="Minimum total_reads.")
     ap.add_argument("--min-total-pct", type=float, default=None, help="Minimum total_pct.")
+    ap.add_argument(
+        "--min-strong-support-fraction",
+        type=float,
+        default=None,
+        help="Minimum (only_hit + only_best) / total_reads.",
+    )
+    ap.add_argument(
+        "--min-strong-count",
+        type=float,
+        default=None,
+        help="Minimum (only_hit + only_best).",
+    )
+    ap.add_argument(
+        "--min-strong-vs-weak-ratio",
+        type=float,
+        default=None,
+        help="Minimum (only_hit + only_best) / (tied_best + not_best).",
+    )
     args = ap.parse_args(argv)
 
     in_path = Path(args.input)
@@ -88,6 +159,12 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if not in_path.exists():
         raise SystemExit(f"Input report not found: {in_path}")
+    if args.min_strong_support_fraction is not None and args.min_strong_support_fraction < 0:
+        raise SystemExit("--min-strong-support-fraction must be >= 0")
+    if args.min_strong_count is not None and args.min_strong_count < 0:
+        raise SystemExit("--min-strong-count must be >= 0")
+    if args.min_strong_vs_weak_ratio is not None and args.min_strong_vs_weak_ratio < 0:
+        raise SystemExit("--min-strong-vs-weak-ratio must be >= 0")
 
     mins: Dict[str, Optional[float]] = {
         "only_hit": args.min_only_hit,
@@ -131,13 +208,20 @@ def main(argv: Optional[List[str]] = None) -> int:
                     fail_rows += 1
                     continue
 
-                if row_passes(row, mins):
-                    pass_rows += 1
-                    writer.writerow(row)
-                    finclude.write(f"{taxid}\n")
-                else:
+                if not row_passes(
+                    row,
+                    mins,
+                    min_strong_support_fraction=args.min_strong_support_fraction,
+                    min_strong_count=args.min_strong_count,
+                    min_strong_vs_weak_ratio=args.min_strong_vs_weak_ratio,
+                ):
                     fail_rows += 1
                     fexclude.write(f"{taxid}\n")
+                    continue
+
+                pass_rows += 1
+                writer.writerow(row)
+                finclude.write(f"{taxid}\n")
 
     with log_path.open("wt", encoding="utf-8", newline="\n") as flog:
         flog.write("MetaTracer taxa-report-filter log\n")
@@ -160,6 +244,18 @@ def main(argv: Optional[List[str]] = None) -> int:
             "total_pct",
         ]:
             flog.write(f"  {col}: {mins[col] if mins[col] is not None else 'none'}\n")
+        flog.write(
+            "  min_strong_support_fraction ((only_hit + only_best)/total_reads): "
+            f"{args.min_strong_support_fraction if args.min_strong_support_fraction is not None else 'none'}\n"
+        )
+        flog.write(
+            "  min_strong_count (only_hit + only_best): "
+            f"{args.min_strong_count if args.min_strong_count is not None else 'none'}\n"
+        )
+        flog.write(
+            "  min_strong_vs_weak_ratio ((only_hit + only_best)/(tied_best + not_best)): "
+            f"{args.min_strong_vs_weak_ratio if args.min_strong_vs_weak_ratio is not None else 'none'}\n"
+        )
         flog.write("\n")
         flog.write(f"rows_total:        {total_rows}\n")
         flog.write(f"rows_pass:         {pass_rows}\n")
@@ -171,4 +267,3 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

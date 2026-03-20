@@ -488,6 +488,12 @@ def filter_cmd(
 @click.option("--min-not-best-pct", type=float, default=None, help="Minimum not_best_pct.")
 @click.option("--min-total-reads", type=float, default=None, help="Minimum total_reads.")
 @click.option("--min-total-pct", type=float, default=None, help="Minimum total_pct.")
+@click.option("--min-strong-support-fraction", type=float, default=None,
+              help="Minimum (only_hit + only_best) / total_reads.")
+@click.option("--min-strong-count", type=float, default=None,
+              help="Minimum (only_hit + only_best).")
+@click.option("--min-strong-vs-weak-ratio", type=float, default=None,
+              help="Minimum (only_hit + only_best) / (tied_best + not_best).")
 def taxa_report_filter_cmd(
     input_path: str,
     out_path: str,
@@ -504,6 +510,9 @@ def taxa_report_filter_cmd(
     min_not_best_pct: Optional[float],
     min_total_reads: Optional[float],
     min_total_pct: Optional[float],
+    min_strong_support_fraction: Optional[float],
+    min_strong_count: Optional[float],
+    min_strong_vs_weak_ratio: Optional[float],
 ) -> None:
     """
     Filter taxa summary report by min cutoffs and emit include/exclude taxid lists.
@@ -537,6 +546,12 @@ def taxa_report_filter_cmd(
         argv += ["--min-total-reads", str(min_total_reads)]
     if min_total_pct is not None:
         argv += ["--min-total-pct", str(min_total_pct)]
+    if min_strong_support_fraction is not None:
+        argv += ["--min-strong-support-fraction", str(min_strong_support_fraction)]
+    if min_strong_count is not None:
+        argv += ["--min-strong-count", str(min_strong_count)]
+    if min_strong_vs_weak_ratio is not None:
+        argv += ["--min-strong-vs-weak-ratio", str(min_strong_vs_weak_ratio)]
 
     rc = mod.main(argv)
     raise SystemExit(int(rc))
