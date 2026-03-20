@@ -90,7 +90,7 @@ RUST_BINARIES: Dict[str, str] = {
 
 COMMAND_GROUPS = [
     ("Build Reference Index", ["reference-build", "index-build"]),
-    ("Assignment", ["assign", "merge", "filter", "annotate"]),
+    ("Assignment", ["assign", "merge", "filter", "taxa-report-filter", "annotate"]),
     ("Utility", ["extract-reads"]),
 ]
 
@@ -467,6 +467,76 @@ def filter_cmd(
         argv += ["--log", log]
     if verbose:
         argv.append("--verbose")
+
+    rc = mod.main(argv)
+    raise SystemExit(int(rc))
+
+
+@cli.command(name="taxa-report-filter")
+@click.option("--input", "input_path", required=True, help="Input taxa summary report (TSV/CSV).")
+@click.option("--out", "out_path", required=True, help="Output filtered report path.")
+@click.option("--include-out", required=True, help="Output path for passing taxids (one per line).")
+@click.option("--exclude-out", required=True, help="Output path for failing taxids (one per line).")
+@click.option("--log", "log_path", required=True, help="Log file path for parameters + summary.")
+@click.option("--min-only-hit", type=float, default=None, help="Minimum only_hit.")
+@click.option("--min-only-hit-pct", type=float, default=None, help="Minimum only_hit_pct.")
+@click.option("--min-only-best", type=float, default=None, help="Minimum only_best.")
+@click.option("--min-only-best-pct", type=float, default=None, help="Minimum only_best_pct.")
+@click.option("--min-tied-best", type=float, default=None, help="Minimum tied_best.")
+@click.option("--min-tied-best-pct", type=float, default=None, help="Minimum tied_best_pct.")
+@click.option("--min-not-best", type=float, default=None, help="Minimum not_best.")
+@click.option("--min-not-best-pct", type=float, default=None, help="Minimum not_best_pct.")
+@click.option("--min-total-reads", type=float, default=None, help="Minimum total_reads.")
+@click.option("--min-total-pct", type=float, default=None, help="Minimum total_pct.")
+def taxa_report_filter_cmd(
+    input_path: str,
+    out_path: str,
+    include_out: str,
+    exclude_out: str,
+    log_path: str,
+    min_only_hit: Optional[float],
+    min_only_hit_pct: Optional[float],
+    min_only_best: Optional[float],
+    min_only_best_pct: Optional[float],
+    min_tied_best: Optional[float],
+    min_tied_best_pct: Optional[float],
+    min_not_best: Optional[float],
+    min_not_best_pct: Optional[float],
+    min_total_reads: Optional[float],
+    min_total_pct: Optional[float],
+) -> None:
+    """
+    Filter taxa summary report by min cutoffs and emit include/exclude taxid lists.
+    """
+    from . import taxa_report_filter as mod
+
+    argv: List[str] = [
+        "--input", input_path,
+        "--out", out_path,
+        "--include-out", include_out,
+        "--exclude-out", exclude_out,
+        "--log", log_path,
+    ]
+    if min_only_hit is not None:
+        argv += ["--min-only-hit", str(min_only_hit)]
+    if min_only_hit_pct is not None:
+        argv += ["--min-only-hit-pct", str(min_only_hit_pct)]
+    if min_only_best is not None:
+        argv += ["--min-only-best", str(min_only_best)]
+    if min_only_best_pct is not None:
+        argv += ["--min-only-best-pct", str(min_only_best_pct)]
+    if min_tied_best is not None:
+        argv += ["--min-tied-best", str(min_tied_best)]
+    if min_tied_best_pct is not None:
+        argv += ["--min-tied-best-pct", str(min_tied_best_pct)]
+    if min_not_best is not None:
+        argv += ["--min-not-best", str(min_not_best)]
+    if min_not_best_pct is not None:
+        argv += ["--min-not-best-pct", str(min_not_best_pct)]
+    if min_total_reads is not None:
+        argv += ["--min-total-reads", str(min_total_reads)]
+    if min_total_pct is not None:
+        argv += ["--min-total-pct", str(min_total_pct)]
 
     rc = mod.main(argv)
     raise SystemExit(int(rc))
