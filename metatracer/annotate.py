@@ -305,9 +305,15 @@ def parse_gff_attributes(attr_str: str) -> Dict[str, str]:
 
 
 class IntervalGFFAnnotator:
-    def __init__(self, by_assembly: Dict[str, MappingRow], fuzzy: int = 0):
+    def __init__(
+        self,
+        by_assembly: Dict[str, MappingRow],
+        fuzzy: int = 0,
+        data_dir: Optional[str] = None,
+    ):
         self.by_assembly = by_assembly
         self.fuzzy = max(0, int(fuzzy))
+        self.data_dir = data_dir
 
         self._pysam = _require(
             "pysam", "Install pysam and ensure your GFF is bgzipped + tabix-indexed.")
@@ -334,21 +340,67 @@ class IntervalGFFAnnotator:
         self._cur_contig = None
         self._cur_tree = None
 
+    def _resolve_gff_path(self, assembly: str, mapped_gff_path: str) -> str:
+        candidates: List[str] = []
+
+        gff_path = (mapped_gff_path or "").strip()
+        if gff_path and gff_path.upper() != "NA":
+            candidates.append(gff_path)
+            if not gff_path.endswith(".gz"):
+                candidates.append(gff_path + ".gz")
+
+        if self.data_dir:
+            base = os.path.join(self.data_dir, assembly)
+            candidates.extend([
+                os.path.join(base, "genomic.gff.gz"),
+                os.path.join(base, "genomic.gff"),
+                os.path.join(base, f"{assembly}_genomic.gff.gz"),
+                os.path.join(base, f"{assembly}_genomic.gff"),
+            ])
+
+        # Deduplicate while preserving order.
+        uniq_candidates: List[str] = []
+        seen = set()
+        for p in candidates:
+            if p not in seen:
+                uniq_candidates.append(p)
+                seen.add(p)
+
+        def _has_local_tbi(p: str) -> bool:
+            # Assume index is colocated with the GFF path.
+            # Accept both exact "<path>.tbi" and gz-variant when map points to .gff.
+            if os.path.exists(p + ".tbi"):
+                return True
+            if (not p.endswith(".gz")) and os.path.exists(p + ".gz.tbi"):
+                return True
+            return False
+
+        for p in uniq_candidates:
+            if os.path.exists(p) and _has_local_tbi(p):
+                # If map points to .gff but .gff.gz has the colocated index, use .gz file.
+                if (not p.endswith(".gz")) and os.path.exists(p + ".gz") and os.path.exists(p + ".gz.tbi"):
+                    return p + ".gz"
+                return p
+
+        for p in uniq_candidates:
+            if os.path.exists(p):
+                raise SystemExit(
+                    f"GFF index not found for assembly '{assembly}' in same location as GFF: "
+                    f"checked '{p}.tbi'" + (f" and '{p}.gz.tbi'" if not p.endswith(".gz") else "")
+                )
+
+        raise SystemExit(
+            f"GFF path not found for assembly '{assembly}'. Checked mapping path '{mapped_gff_path}'"
+            + (f" and fallback under data-dir '{self.data_dir}'." if self.data_dir else ".")
+        )
+
     def _get_tabix(self, assembly: str):
         if assembly not in self._tabix:
             m = self.by_assembly.get(assembly)
             if m is None:
                 raise SystemExit(
                     f"Assembly '{assembly}' not found in mapping table.")
-            gff_path = m.gff_path
-            if gff_path and not gff_path.endswith(".gz") and os.path.exists(gff_path + ".gz"):
-                gff_path = gff_path + ".gz"
-            if not os.path.exists(gff_path):
-                raise SystemExit(
-                    f"GFF path does not exist for assembly '{assembly}': {gff_path}")
-            if not os.path.exists(gff_path + ".tbi"):
-                raise SystemExit(
-                    f"GFF index not found for assembly '{assembly}': {gff_path}.tbi")
+            gff_path = self._resolve_gff_path(assembly, m.gff_path)
             self._tabix[assembly] = self._pysam.TabixFile(gff_path)
         return self._tabix[assembly]
 
@@ -421,8 +473,9 @@ class IntervalGFFAnnotator:
 # ----------------------------
 
 class ProteinSource:
-    def __init__(self, by_assembly: Dict[str, MappingRow]):
+    def __init__(self, by_assembly: Dict[str, MappingRow], data_dir: Optional[str] = None):
         self.by_assembly = by_assembly
+        self.data_dir = data_dir
         self._pyfaidx = None
         self._bio_seqio = None
 
@@ -446,6 +499,40 @@ class ProteinSource:
     def close(self) -> None:
         self._idx.clear()
 
+    def _resolve_protein_path(self, assembly: str, mapped_fa_path: str) -> str:
+        candidates: List[str] = []
+
+        fa = (mapped_fa_path or "").strip()
+        if fa and fa.upper() != "NA":
+            candidates.append(fa)
+
+        if self.data_dir:
+            base = os.path.join(self.data_dir, assembly)
+            candidates.extend([
+                os.path.join(base, "protein.faa"),
+                os.path.join(base, "protein.faa.gz"),
+                os.path.join(base, f"{assembly}_protein.faa"),
+                os.path.join(base, f"{assembly}_protein.faa.gz"),
+                os.path.join(base, "genomic.protein.faa"),
+                os.path.join(base, "genomic.protein.faa.gz"),
+            ])
+
+        uniq_candidates: List[str] = []
+        seen = set()
+        for p in candidates:
+            if p not in seen:
+                uniq_candidates.append(p)
+                seen.add(p)
+
+        for p in uniq_candidates:
+            if os.path.exists(p):
+                return p
+
+        raise SystemExit(
+            f"Protein FASTA path not found for assembly '{assembly}'. Checked mapping path '{mapped_fa_path}'"
+            + (f" and fallback under data-dir '{self.data_dir}'." if self.data_dir else ".")
+        )
+
     def _get_index(self, assembly: str):
         if assembly in self._idx:
             return self._idx[assembly]
@@ -454,10 +541,7 @@ class ProteinSource:
         if m is None:
             raise SystemExit(
                 f"Assembly '{assembly}' not found in mapping table.")
-        fa = m.protein_fa_path
-        if not os.path.exists(fa):
-            raise SystemExit(
-                f"Protein FASTA path does not exist for assembly '{assembly}': {fa}")
+        fa = self._resolve_protein_path(assembly, m.protein_fa_path)
 
         if self._pyfaidx is not None:
             Fasta = getattr(self._pyfaidx, "Fasta")
@@ -487,12 +571,17 @@ class ProteinSource:
 
 
 class ProteinIndexer:
-    def __init__(self, proteins_fasta_out: str, by_assembly: Dict[str, MappingRow]):
+    def __init__(
+        self,
+        proteins_fasta_out: str,
+        by_assembly: Dict[str, MappingRow],
+        protein_data_dir: Optional[str] = None,
+    ):
         self._out = open(proteins_fasta_out, "wt",
                          encoding="utf-8", newline="\n")
         self._seq_to_int: Dict[str, int] = {}
         self._next_id = 1
-        self._src = ProteinSource(by_assembly)
+        self._src = ProteinSource(by_assembly, data_dir=protein_data_dir)
 
     def close(self) -> None:
         try:
@@ -530,12 +619,16 @@ def merge_sorted_chunks(
     by_assembly: Dict[str, MappingRow],
     proteins_fasta_out: str,
     fuzzy: int,
+    gff_data_dir: Optional[str],
+    protein_data_dir: Optional[str],
 ) -> None:
     annot = None
     prot_index = None
     if not taxa_only:
-        annot = IntervalGFFAnnotator(by_assembly, fuzzy=fuzzy)
-        prot_index = ProteinIndexer(proteins_fasta_out, by_assembly)
+        annot = IntervalGFFAnnotator(
+            by_assembly, fuzzy=fuzzy, data_dir=gff_data_dir)
+        prot_index = ProteinIndexer(
+            proteins_fasta_out, by_assembly, protein_data_dir=protein_data_dir)
 
     iters = [chunk_reader(p) for p in chunk_paths]
     heap: List[Tuple[Tuple[str, str, int], int, Tuple]] = []
@@ -627,6 +720,9 @@ def run(
     taxa_only: bool = False,
     chunk_size: int = 500_000,
     tmpdir: Optional[str] = None,
+    data_dir: Optional[str] = None,
+    gff_data_dir: Optional[str] = None,
+    protein_data_dir: Optional[str] = None,
     fuzzy: int = 0,
     verbose: int = 0,
 ) -> int:
@@ -728,6 +824,9 @@ def run(
         # proteins file is irrelevant in taxa-only mode; create empty to keep Snakemake happy
         open(proteins_out, "wt", encoding="utf-8").close()
 
+    resolved_gff_data_dir = gff_data_dir or data_dir
+    resolved_protein_data_dir = protein_data_dir or data_dir
+
     logging.info("Pass 2: merging %d chunks -> %s", len(chunk_paths), out)
     merge_sorted_chunks(
         chunk_paths=chunk_paths,
@@ -737,6 +836,8 @@ def run(
         by_assembly=by_assembly,
         proteins_fasta_out=proteins_out,
         fuzzy=fuzzy,
+        gff_data_dir=resolved_gff_data_dir,
+        protein_data_dir=resolved_protein_data_dir,
     )
 
     logging.info("Done.")
@@ -766,6 +867,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                    help="Max hits per chunk before sorting to disk.")
     p.add_argument("--tmpdir", default=None,
                    help="Temp directory for chunk files (default: system temp).")
+    p.add_argument("--data-dir", default=None,
+                   help="Optional fallback base directory for both GFF and protein FASTA lookup when table paths are missing.")
+    p.add_argument("--gff-data-dir", default=None,
+                   help="Optional fallback base directory to resolve missing GFF paths as <gff-data-dir>/<assembly>/genomic.gff(.gz).")
+    p.add_argument("--protein-data-dir", default=None,
+                   help="Optional fallback base directory to resolve missing protein FASTA paths as <protein-data-dir>/<assembly>/protein.faa(.gz).")
     p.add_argument("--fuzzy", type=int, default=0,
                    help="+/- bp window if exact CDS lookup fails (0 disables).")
     p.add_argument("-v", "--verbose", action="count", default=0)
@@ -779,6 +886,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         taxa_only=args.taxa_only,
         chunk_size=args.chunk_size,
         tmpdir=args.tmpdir,
+        data_dir=args.data_dir,
+        gff_data_dir=args.gff_data_dir,
+        protein_data_dir=args.protein_data_dir,
         fuzzy=args.fuzzy,
         verbose=args.verbose,
     )

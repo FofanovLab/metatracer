@@ -504,6 +504,21 @@ def filter_cmd(
     help="Temp directory for chunk files (default: system temp).",
 )
 @click.option(
+    "--data-dir",
+    default=None,
+    help="Optional fallback base directory for both GFF and protein FASTA lookup.",
+)
+@click.option(
+    "--gff-data-dir",
+    default=None,
+    help="Optional fallback base directory for GFF lookup: <gff-data-dir>/<assembly>/genomic.gff(.gz).",
+)
+@click.option(
+    "--protein-data-dir",
+    default=None,
+    help="Optional fallback base directory for protein FASTA lookup: <protein-data-dir>/<assembly>/protein.faa(.gz).",
+)
+@click.option(
     "--fuzzy",
     type=int,
     default=0,
@@ -519,6 +534,9 @@ def annotate_cmd(
     taxa_only: bool,
     chunk_size: int,
     tmpdir: Optional[str],
+    data_dir: Optional[str],
+    gff_data_dir: Optional[str],
+    protein_data_dir: Optional[str],
     fuzzy: int,
     verbose: int,
 ) -> None:
@@ -535,6 +553,9 @@ def annotate_cmd(
         taxa_only=taxa_only,
         chunk_size=chunk_size,
         tmpdir=tmpdir,
+        data_dir=data_dir,
+        gff_data_dir=gff_data_dir,
+        protein_data_dir=protein_data_dir,
         fuzzy=fuzzy,
         verbose=verbose,
     )
