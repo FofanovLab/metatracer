@@ -220,7 +220,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     removed_reads_unparsable = 0
     removed_reads_taxa = 0
     removed_reads_max_edit = 0
-    removed_reads_edit_delta = 0
+    removed_hits_edit_delta = 0
     kept_reads = 0
     kept_hits = 0
 
@@ -277,12 +277,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
             # 3) edit_delta per read
             parsed = edit_delta_filter(parsed_max_edit, edit_delta=args.edit_delta)
-
-            if not parsed:
-                removed_reads += 1
-                removed_reads_edit_delta += 1
-                removed_hits += original_n
-                continue
+            removed_hits_edit_delta += (len(parsed_max_edit) - len(parsed))
 
             # Count removals
             removed_hits += (original_n - len(parsed))
@@ -301,8 +296,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     logging.info("  - unparsable:    %d", removed_reads_unparsable)
     logging.info("  - taxa filter:   %d", removed_reads_taxa)
     logging.info("  - max edit:      %d", removed_reads_max_edit)
-    logging.info("  - edit delta:    %d", removed_reads_edit_delta)
     logging.info("Removed hits:      %d", removed_hits)
+    logging.info("  - edit delta:    %d", removed_hits_edit_delta)
 
     return 0
 
