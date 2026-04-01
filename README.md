@@ -188,6 +188,41 @@ If the result file is not empty, `metatracer assign` will resume from the last a
 
 ---
 
+### 2.2.1 Benchmarking
+
+We benchmarked `metatracer assign` on a reference collection split into **10 MG-indices** built with:
+
+* `chunk_size: 10`
+* `sample_interval: 64`
+* `sa_sample: 32`
+
+Each index was approximately **35 GB** on disk.
+
+Benchmarking was performed on simulated oral metatranscriptomic read sets from [figshare: 10.6084/m9.figshare.31245190](https://doi.org/10.6084/m9.figshare.31245190). Each read set contained approximately **10 million 150bp reads**. Assignment was run separately against each index with **8 threads**, using **3 replicates per sample/index combination** (**90 total runs**), with the following command:
+
+```bash
+metatracer assign \
+  --fastq {reads.fastq} \
+  --index {index} \
+  --results {output.bn} \
+  --threads 8 \
+  --force-overwrite \
+  --seed-interval 8 \
+  --tune-max-hits 1000 \
+  --edit-rate 0.13 \
+  --seed-size 18 \
+  --min-seed 0.015 \
+  --max-candidates 1000 \
+  --max-assignments 50
+```
+
+Observed assignment performance:
+
+* Wall time, minutes: mean `20.29`, median `17.77`, min `8.80`, max `74.43`, SD `9.81`
+* Max RSS, GB: mean `34.845`, median `34.847`, min `34.619`, max `34.881`, SD `0.030`
+
+---
+
 ### 2.3 Run `metatracer merge`
 
 `metatracer merge` combines assignment output files into a single per-read assignments file for a sample.
