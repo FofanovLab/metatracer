@@ -8,6 +8,8 @@ MetaTracer is organized into two main workflows:
 
 The reference workflow prepares NCBI Datasets assemblies (genome FASTA + GFF3 + proteins), reformats/chunks them for indexing, and builds MG-indices. The assignment workflow bins reads against the indices, merges hits from multiple indices and/or samples (i.e. for paired reads), filters hits based on low frequency taxa and edit distances, then annotates hits with taxonomic and CDS/protein data.
 
+Preprint: [MetaTracer bioRxiv manuscript](https://www.biorxiv.org/content/10.64898/2026.02.20.707109.abstract)
+
 ---
 
 ## 1) Reference MG-index Build
