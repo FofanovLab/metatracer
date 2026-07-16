@@ -1,0 +1,198 @@
+"""GTDB bacterial representative annotation-availability workflow."""
+
+from pathlib import Path
+
+configfile: "config.yaml"
+
+OUT = config.get("output_dir", "results").rstrip("/")
+RES = config.get("resource_dir", "resources").rstrip("/")
+LOG = config.get("log_dir", "logs").rstrip("/")
+BATCH_DIR = f"{RES}/accession_batches"
+UNPACK_DIR = f"{RES}/ncbi_datasets"
+ZIP_DIR = f"{RES}/ncbi_dataset_zips"
+INV_DIR = f"{RES}/batch_inventories"
+
+FINAL_OUTPUTS = [
+    f"{OUT}/gtdb_bacterial_representatives.tsv",
+    f"{OUT}/gtdb_bacterial_representatives.filtered.tsv",
+    f"{OUT}/gtdb_bacterial_representative_accessions.txt",
+    f"{OUT}/gtdb_bacterial_representative_taxonomy.tsv",
+    f"{OUT}/ncbi_datasets_file_inventory.tsv",
+    f"{OUT}/gtdb_representatives_with_ncbi_annotation_status.tsv",
+    f"{OUT}/summary_annotation_status.tsv",
+    f"{OUT}/summary_by_genome_category.tsv",
+    f"{OUT}/summary_by_gtdb_phylum.tsv",
+    f"{OUT}/summary_by_gtdb_rank.tsv",
+    f"{OUT}/summary_by_accession_prefix.tsv",
+]
+
+
+rule all:
+    input:
+        FINAL_OUTPUTS
+
+
+rule download_gtdb_metadata:
+    output:
+        f"{RES}/bac120_metadata.tsv.gz"
+    params:
+        url=config["gtdb_metadata_url"]
+    log:
+        f"{LOG}/download_gtdb_metadata.log"
+    shell:
+        """
+        mkdir -p $(dirname {output:q}) $(dirname {log:q})
+        curl -L --fail --retry 4 --retry-delay 10 {params.url:q} -o {output:q} \
+          > {log:q} 2>&1
+        """
+
+
+rule decompress_gtdb_metadata:
+    input:
+        f"{RES}/bac120_metadata.tsv.gz"
+    output:
+        f"{RES}/bac120_metadata.tsv"
+    log:
+        f"{LOG}/decompress_gtdb_metadata.log"
+    shell:
+        """
+        gzip -cd {input:q} > {output:q} 2> {log:q}
+        """
+
+
+rule parse_gtdb_metadata:
+    input:
+        f"{RES}/bac120_metadata.tsv"
+    output:
+        representatives=f"{OUT}/gtdb_bacterial_representatives.tsv",
+        filtered=f"{OUT}/gtdb_bacterial_representatives.filtered.tsv",
+        accessions=f"{OUT}/gtdb_bacterial_representative_accessions.txt",
+        taxonomy=f"{OUT}/gtdb_bacterial_representative_taxonomy.tsv",
+    params:
+        filter_representatives=config.get("filter_to_representatives", True),
+        exclude_environmental=config.get("exclude_mag_sag_environmental", False),
+        min_completeness=config.get("min_checkm_completeness", 95),
+        max_contamination=config.get("max_checkm_contamination", 5),
+        max_accessions=config.get("max_accessions"),
+    conda:
+        "envs/python.yaml"
+    log:
+        f"{LOG}/parse_gtdb_metadata.log"
+    script:
+        "scripts/parse_gtdb_metadata.py"
+
+
+checkpoint split_accessions:
+    input:
+        f"{OUT}/gtdb_bacterial_representative_accessions.txt"
+    output:
+        batches=directory(BATCH_DIR),
+        manifest=f"{RES}/accession_batches.manifest.tsv",
+    params:
+        batch_size=config.get("batch_size", 500)
+    conda:
+        "envs/python.yaml"
+    log:
+        f"{LOG}/split_accessions.log"
+    script:
+        "scripts/split_accessions.py"
+
+
+def batch_ids(wildcards):
+    checkpoint_output = checkpoints.split_accessions.get(**wildcards).output.batches
+    return sorted(glob_wildcards(str(checkpoint_output) + "/batch_{batch}.txt").batch)
+
+
+def batch_inventories(wildcards):
+    return expand(f"{INV_DIR}/batch_{{batch}}.tsv", batch=batch_ids(wildcards))
+
+
+rule download_ncbi_batch:
+    input:
+        f"{BATCH_DIR}/batch_{{batch}}.txt"
+    output:
+        archive=f"{ZIP_DIR}/batch_{{batch}}.zip",
+        status=f"{ZIP_DIR}/batch_{{batch}}.status.json",
+    params:
+        include=config.get("datasets_include", "genome,gff3,protein,cds,seq-report")
+    conda:
+        "envs/ncbi_datasets.yaml"
+    log:
+        f"{LOG}/download_ncbi_batch_{{batch}}.log"
+    script:
+        "scripts/download_ncbi_batch.py"
+
+
+rule unpack_ncbi_batch:
+    input:
+        archive=f"{ZIP_DIR}/batch_{{batch}}.zip",
+        status=f"{ZIP_DIR}/batch_{{batch}}.status.json",
+    output:
+        directory(f"{UNPACK_DIR}/batch_{{batch}}")
+    conda:
+        "envs/python.yaml"
+    log:
+        f"{LOG}/unpack_ncbi_batch_{{batch}}.log"
+    script:
+        "scripts/unpack_ncbi_batch.py"
+
+
+rule inventory_ncbi_batch:
+    input:
+        accessions=f"{BATCH_DIR}/batch_{{batch}}.txt",
+        dataset=f"{UNPACK_DIR}/batch_{{batch}}",
+        status=f"{ZIP_DIR}/batch_{{batch}}.status.json",
+    output:
+        f"{INV_DIR}/batch_{{batch}}.tsv"
+    conda:
+        "envs/python.yaml"
+    log:
+        f"{LOG}/inventory_ncbi_batch_{{batch}}.log"
+    script:
+        "scripts/inventory_ncbi_dataset.py"
+
+
+rule combine_ncbi_inventories:
+    input:
+        batch_inventories
+    output:
+        f"{OUT}/ncbi_datasets_file_inventory.tsv"
+    conda:
+        "envs/python.yaml"
+    log:
+        f"{LOG}/combine_ncbi_inventories.log"
+    script:
+        "scripts/combine_inventories.py"
+
+
+rule join_annotation_status:
+    input:
+        metadata=f"{OUT}/gtdb_bacterial_representatives.filtered.tsv",
+        inventory=f"{OUT}/ncbi_datasets_file_inventory.tsv",
+    output:
+        f"{OUT}/gtdb_representatives_with_ncbi_annotation_status.tsv"
+    conda:
+        "envs/python.yaml"
+    log:
+        f"{LOG}/join_annotation_status.log"
+    script:
+        "scripts/join_annotation_status.py"
+
+
+rule summarize_annotation_status:
+    input:
+        all_representatives=f"{OUT}/gtdb_bacterial_representatives.tsv",
+        filtered=f"{OUT}/gtdb_bacterial_representatives.filtered.tsv",
+        joined=f"{OUT}/gtdb_representatives_with_ncbi_annotation_status.tsv",
+    output:
+        status=f"{OUT}/summary_annotation_status.tsv",
+        category=f"{OUT}/summary_by_genome_category.tsv",
+        phylum=f"{OUT}/summary_by_gtdb_phylum.tsv",
+        rank=f"{OUT}/summary_by_gtdb_rank.tsv",
+        prefix=f"{OUT}/summary_by_accession_prefix.tsv",
+    conda:
+        "envs/python.yaml"
+    log:
+        f"{LOG}/summarize_annotation_status.log"
+    script:
+        "scripts/summarize_annotation_status.py"

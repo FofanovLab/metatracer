@@ -1,0 +1,16 @@
+gtdb_metadata_url: "https://data.gtdb.ecogenomic.org/releases/latest/bac120_metadata.tsv.gz"
+output_dir: "results"
+resource_dir: "resources"
+log_dir: "logs"
+
+# GTDB representative selection and optional quality filtering.
+filter_to_representatives: true
+exclude_mag_sag_environmental: false
+min_checkm_completeness: 95
+max_checkm_contamination: 5
+
+# Set to 100 for a small end-to-end test, or null for every passing accession.
+max_accessions: null
+
+datasets_include: "genome,gff3,protein,cds,seq-report"
+batch_size: 500
