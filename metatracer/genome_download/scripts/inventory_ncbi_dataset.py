@@ -1,11 +1,10 @@
 """Inventory expected NCBI Datasets files for every requested accession."""
 
-from __future__ import annotations
-
 import json
 import logging
 import re
 from pathlib import Path
+from typing import Dict, List
 
 import pandas as pd
 
@@ -20,7 +19,7 @@ COLUMNS = [
 ACCESSION_RE = re.compile(r"GC[AF]_\d+(?:\.\d+)?")
 
 
-def first_path(paths: list[Path]) -> str:
+def first_path(paths: List[Path]) -> str:
     return str(sorted(paths)[0]) if paths else ""
 
 
@@ -33,7 +32,7 @@ root = Path(snakemake.input.dataset)
 status = json.loads(Path(snakemake.input.status).read_text())
 all_files = [path for path in root.rglob("*") if path.is_file()]
 assembly_reports = [p for p in all_files if p.name == "assembly_data_report.jsonl"]
-report_accessions: dict[str, Path] = {}
+report_accessions: Dict[str, Path] = {}
 for report in assembly_reports:
     with report.open("rt", encoding="utf-8", errors="replace") as handle:
         for line in handle:

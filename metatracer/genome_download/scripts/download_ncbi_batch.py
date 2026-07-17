@@ -1,7 +1,5 @@
 """Download one NCBI Datasets batch without making partial failures fatal."""
 
-from __future__ import annotations
-
 import json
 import logging
 import subprocess

@@ -1,10 +1,9 @@
 """Parse and filter GTDB metadata while preserving original columns."""
 
-from __future__ import annotations
-
 import logging
 import re
 from pathlib import Path
+from typing import Dict
 
 import pandas as pd
 
@@ -28,7 +27,7 @@ def ncbi_accession(value: object) -> str:
     return re.sub(r"^(RS_|GB_)", "", text)
 
 
-def parse_taxonomy(value: object) -> dict[str, str]:
+def parse_taxonomy(value: object) -> Dict[str, str]:
     parsed = {rank: "" for rank in RANKS}
     if pd.isna(value):
         return parsed

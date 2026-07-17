@@ -1,7 +1,5 @@
 """Create overall and grouped GTDB/NCBI annotation availability summaries."""
 
-from __future__ import annotations
-
 import logging
 from pathlib import Path
 
@@ -68,7 +66,8 @@ overall = [
 for column, name in FILE_COLUMNS:
     present = boolean(joined[column])
     count = int((selected & present).sum())
-    overall.append({"metric": f"selected_with_{column.removesuffix('_present')}",
+    metric_column = column[:-len("_present")] if column.endswith("_present") else column
+    overall.append({"metric": f"selected_with_{metric_column}",
                     "count": count, "denominator": selected_count,
                     "percent": percent(count, selected_count)})
 
