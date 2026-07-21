@@ -3,4 +3,4 @@ channels:
   - conda-forge
   - bioconda
 dependencies:
-  - ncbi-datasets-cli>=16
+  - ncbi-datasets-cli>=18.33.1

@@ -102,7 +102,9 @@ rule download_ncbi_dataset:
         archive=DATASET_ZIP,
         status=f"{RES}/ncbi_dataset.status.json",
     params:
-        include=config.get("datasets_include", "genome,gff3,protein")
+        include=config.get("datasets_include", "genome,gff3,protein"),
+        attempts=config.get("datasets_download_attempts", 5),
+        retry_delay=config.get("datasets_retry_delay_seconds", 30),
     conda:
         "envs/ncbi_datasets.yaml"
     log:

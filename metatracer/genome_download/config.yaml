@@ -47,4 +47,6 @@ accession_filters:
 max_accessions: null
 
 datasets_include: "genome,gff3,protein"
+datasets_download_attempts: 5
+datasets_retry_delay_seconds: 30
 rehydrate_max_workers: 10
