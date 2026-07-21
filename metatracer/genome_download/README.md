@@ -43,6 +43,128 @@ only genome FASTA plus package metadata. Use `genome,gff3,protein` when the
 NCBI annotations should also be retained; an accession is still inventoried
 when an optional GFF3 or protein FASTA is unavailable.
 
+## Choosing a database profile
+
+Database selection trades environmental sensitivity against download size,
+index size, runtime, assembly quality, and annotation availability. The
+following profiles are starting points rather than universal quality standards.
+
+| Profile | Environmental sensitivity | Speed and storage | Expected gene completeness | Typical use |
+| --- | --- | --- | --- | --- |
+| Broad environmental | Highest | Largest and slowest | Variable | Discovery-oriented metagenomics |
+| Medium gene-friendly | High | Moderate | Generally high | General metagenomics and metatranscriptomics |
+| High-confidence isolate | Lower | Smallest and fastest | Highest | Cultured and well-studied organisms |
+
+### Broad environmental
+
+Use this profile when uncharacterized or uncultured organisms are important and
+unassigned reads are more costly than additional runtime. It includes MAGs,
+SAGs, unknown source categories, and contig-level assemblies.
+
+```yaml
+gtdb_domains: [bacteria, archaea]
+accession_filters:
+  representatives_only: true
+  min_checkm_completeness: 80
+  max_checkm_contamination: 10
+  genome_sources: [isolate, mag, sag, unknown]
+  assembly_levels: null
+  accession_prefixes: [GCF, GCA]
+```
+
+This provides the widest representative coverage, but produces the largest
+download and FM-index. Fragmented assemblies are more likely to contain
+truncated genes, missing genomic context, or assembly artifacts.
+
+### Medium gene-friendly
+
+This is the recommended general-purpose profile and the default in
+`config.standard.yaml`. It retains high-quality MAGs while excluding SAGs,
+unknown source categories, and contig-level assemblies.
+
+```yaml
+accession_filters:
+  representatives_only: true
+  min_checkm_completeness: 95
+  max_checkm_contamination: 5
+  genome_sources: [isolate, mag]
+  assembly_levels: [Complete Genome, Chromosome, Scaffold]
+  accession_prefixes: [GCF, GCA]
+```
+
+This is a useful compromise for gene detection and differential-expression
+work: it retains substantial environmental diversity while favoring assemblies
+that are likely to contain intact genes and useful flanking sequence.
+
+### High-confidence isolate
+
+Use this profile when the targets are primarily cultured, well-studied species
+and fast searches or annotation consistency matter more than environmental
+coverage.
+
+```yaml
+accession_filters:
+  representatives_only: true
+  min_checkm_completeness: 98
+  max_checkm_contamination: 2
+  genome_sources: [isolate]
+  assembly_levels: [Complete Genome, Chromosome]
+  accession_prefixes: [GCF]
+```
+
+This produces a smaller reference with a high probability of complete genes and
+RefSeq annotation. Reads from uncultured organisms, MAG-only species clusters,
+and divergent environmental lineages are more likely to remain unassigned.
+
+### Existing NCBI annotations versus genome-only builds
+
+To retain available NCBI annotations and proteins, use:
+
+```yaml
+datasets_include: "genome,gff3,protein"
+```
+
+This supports direct CDS and protein lookup, but increases download and storage
+requirements and combines annotations produced by different NCBI pipelines or
+versions. An NCBI-query accession source can additionally require annotation:
+
+```yaml
+ncbi_query:
+  annotated_only: true
+```
+
+For a smaller, uniform reference intended for on-demand ORF prediction, use:
+
+```yaml
+datasets_include: "genome"
+```
+
+Genome-only builds avoid storing GFF3 and protein FASTA files and allow selected
+regions to be predicted consistently with the same Prodigal version. They do
+not provide existing curated annotations unless those files are downloaded
+separately.
+
+### Taxonomy identifier policy
+
+The database profile controls which assemblies are selected; the taxonomy
+policy independently controls how selected assemblies are represented in MTSv:
+
+```yaml
+# ncbi, gtdb, or ncbi_then_gtdb
+reference_taxonomy_source: ncbi_then_gtdb
+```
+
+- `ncbi` uses only an NCBI species TaxID. TaxIDs below species are rolled up;
+  missing TaxIDs and TaxIDs without a species ancestor are excluded.
+- `gtdb` consistently uses the encoded GTDB representative accession for every
+  retained species cluster.
+- `ncbi_then_gtdb` uses an NCBI species TaxID when possible and falls back to
+  the encoded GTDB representative when NCBI lacks a species-level assignment.
+
+The combined policy generally provides the broadest usable environmental
+coverage. The strict NCBI policy is preferable when every identifier must work
+directly with NCBI taxonomy-aware downstream tools.
+
 Standard outputs are under `standard_results/`:
 
 - `accessions.txt` and `accession_selection.tsv`: the exact retained list and
