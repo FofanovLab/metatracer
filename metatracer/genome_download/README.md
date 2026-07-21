@@ -1,6 +1,6 @@
-# GTDB bacterial representative preprocessing
+# GTDB bacterial and archaeal representative preprocessing
 
-This Snakemake workflow identifies GTDB bacterial representative genomes,
+This Snakemake workflow identifies GTDB bacterial and/or archaeal representative genomes,
 applies optional quality/source filters, downloads available files through NCBI
 Datasets, inventories annotation files, and reports how many representatives
 have defined CDS sequences.
@@ -51,72 +51,108 @@ the same initial accessions for a fixed GTDB release. For fully reproducible
 input data, replace the `releases/latest` metadata URL with a versioned GTDB
 release URL.
 
-## Filtering
+## Domain selection and filtering
 
-Defaults select GTDB representatives with at least 95% CheckM completeness and
-at most 5% CheckM contamination. Set a threshold to `null` to disable it.
+Select bacteria, archaea, or both in `config.yaml`:
 
 ```yaml
-filter_to_representatives: true
-exclude_mag_sag_environmental: false
-min_checkm_completeness: 95
-max_checkm_contamination: 5
+gtdb_domains:
+  - bacteria
+  - archaea
 ```
 
-Environmental classification uses available GTDB/NCBI genome-category,
+This downloads and combines the GTDB `bac120` and `ar53` metadata tables. Each
+kept row records its source in `gtdb_metadata_set`.
+
+Metadata filters live under `accession_filters`. All enabled filters are
+combined with AND, and `null` disables an optional filter.
+
+```yaml
+accession_filters:
+  representatives_only: true
+  min_checkm_completeness: 95
+  max_checkm_contamination: 5
+  genome_sources: [isolate, mag, sag, unknown]
+  assembly_levels: null
+  accession_prefixes: [GCF, GCA]
+  gtdb_type_designations: null
+  ncbi_refseq_categories: null
+  include_taxa: {}
+  exclude_taxa: {}
+```
+
+Source classification uses available GTDB/NCBI genome-category,
 isolation-source, project-name, and BioProject text. It assigns one of:
 
-- `isolate-like`
-- `MAG/environmental`
-- `SAG`
+- `isolate`
+- `mag`
+- `sag`
+- `unknown`
 
-Because metadata descriptions are not perfectly standardized, inspect
-`genome_source_category` before using `exclude_mag_sag_environmental: true` for
-a final analysis.
+Because metadata descriptions are not perfectly standardized, inspect the
+derived `genome_source_category` column before excluding categories in a final
+analysis. Taxonomic filters accept domain through species ranks and names
+without GTDB prefixes, for example:
+
+```yaml
+  include_taxa:
+    phylum: [Pseudomonadota]
+  exclude_taxa:
+    genus: [Escherichia]
+```
 
 ## Workflow stages
 
-1. Download and decompress bacterial GTDB metadata.
+1. Download and decompress the configured GTDB metadata table(s).
 2. Normalize `RS_GCF_...` and `GB_GCA_...` accessions.
 3. Parse domain through species from the GTDB taxonomy string.
 4. Apply representative, quality, and optional environmental filters.
-5. Split accessions into deterministic numbered batches.
-6. Download and unpack NCBI Datasets packages.
-7. Inventory genome FASTA, GFF3, CDS FASTA, protein FASTA, sequence report, and
-   assembly data report availability per accession.
+5. Create and unpack one dehydrated NCBI Datasets package for the retained list.
+6. Rehydrate only genome FASTA, GFF3, and protein FASTA files. Interrupted
+   rehydration can be rerun in the same directory without discarding files that
+   were already retrieved.
+7. Inventory returned files for every requested accession, including accessions
+   omitted by NCBI or lacking annotation files.
 8. Join availability back to GTDB metadata and create summary tables.
 
-A failed NCBI batch is recorded in its `.status.json`. The workflow then emits
-missing-file inventory rows for that batch and continues to the summaries. This
-makes partial availability inspectable. After fixing a transient failure,
-delete that batch's ZIP, status JSON, unpacked directory, and inventory row file
-before rerunning it.
+A failed package creation or rehydration remains a failed Snakemake job. Rerun
+Snakemake after fixing a transient issue; rehydration reuses its existing
+directory and continues retrieving missing files. Once rehydration succeeds,
+the workflow emits one inventory row per requested accession, making missing
+annotation and accessions omitted by NCBI inspectable.
 
 ## Principal outputs
 
 All final tables are written under `results/` by default:
 
-- `gtdb_bacterial_representatives.tsv`: selected representative rows with all
+- `gtdb_representatives.tsv`: selected representative rows before optional
+  metadata filters, with all
   original metadata columns plus normalized and parsed fields.
-- `gtdb_bacterial_representatives.filtered.tsv`: representatives after quality
-  and source filtering.
-- `gtdb_bacterial_representative_accessions.txt`: accessions selected for the
-  NCBI download, truncated by `max_accessions` when configured.
-- `gtdb_bacterial_representative_taxonomy.tsv`: normalized taxonomy table.
+- `gtdb_kept_accessions_metadata.tsv`: exactly the unique accessions retained
+  for download, with all GTDB metadata and derived fields.
+- `gtdb_representative_accessions.txt`: the matching one-accession-per-line NCBI
+  download list.
+- `gtdb_representative_taxonomy.tsv`: normalized taxonomy for kept accessions.
+- `gtdb_accession_filter_summary.tsv`: input, filtering, valid-accession,
+  deduplication, and final kept counts. The same headline counts are written to
+  `logs/parse_gtdb_metadata.log`.
 - `ncbi_datasets_file_inventory.tsv`: one row per requested accession and paths
   to every detected file type.
 - `gtdb_representatives_with_ncbi_annotation_status.tsv`: filtered GTDB rows
   joined to the NCBI inventory.
 - `summary_annotation_status.tsv`: overall availability counts and percentages.
+  It contains both `selected_with_*` and `selected_missing_*` rows for genome
+  FASTA, GFF3, and protein FASTA. Missing-file counts are also written to
+  `logs/summarize_annotation_status.log` and the dataset inventory log.
 - `summary_by_genome_category.tsv`: both the original `ncbi_genome_category`
   values and the derived isolate/MAG/SAG source categories.
 - `summary_by_gtdb_phylum.tsv`
 - `summary_by_gtdb_rank.tsv`: phylum, class, and genus counts in one table.
 - `summary_by_accession_prefix.tsv`: RefSeq (`GCF`) versus GenBank (`GCA`).
 
-When `max_accessions` is set, annotation percentages use only
-`selected_for_download` accessions as their denominator. Total and filtered
-representative counts still describe the complete parsed metadata.
+When `max_accessions` is set, the kept metadata, taxonomy, accession list, and
+annotation percentages all describe that truncated selection. The accession
+filter summary still records the complete input and pre-limit filtering counts.
 
-Intermediate batch files live under `resources/`, and rule logs live under
-`logs/`. Change these locations in `config.yaml` if desired.
+The dehydrated ZIP and rehydrated dataset live under `resources/`, and rule logs
+live under `logs/`. Change these locations in `config.yaml` if desired.

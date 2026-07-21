@@ -10,7 +10,8 @@ import pandas as pd
 
 
 COLUMNS = [
-    "ncbi_accession", "download_success", "genome_fasta_present", "gff3_present",
+    "ncbi_accession", "download_success", "package_success", "rehydrate_success",
+    "genome_fasta_present", "gff3_present",
     "cds_fasta_present", "protein_fasta_present", "sequence_report_present",
     "assembly_data_report_present", "genome_fasta_path", "gff3_path",
     "cds_fasta_path", "protein_fasta_path", "sequence_report_path",
@@ -29,7 +30,8 @@ logging.basicConfig(filename=snakemake.log[0], level=logging.INFO,
 accessions = [line.strip() for line in Path(snakemake.input.accessions).read_text().splitlines()
               if line.strip()]
 root = Path(snakemake.input.dataset)
-status = json.loads(Path(snakemake.input.status).read_text())
+package_status = json.loads(Path(snakemake.input.package_status).read_text())
+rehydrate_status = json.loads(Path(snakemake.input.rehydrate_status).read_text())
 all_files = [path for path in root.rglob("*") if path.is_file()]
 assembly_reports = [p for p in all_files if p.name == "assembly_data_report.jsonl"]
 report_accessions: Dict[str, Path] = {}
@@ -53,7 +55,10 @@ for accession in accessions:
     assembly = report_accessions.get(accession)
     row = {
         "ncbi_accession": accession,
-        "download_success": bool(status.get("success", False)),
+        "download_success": bool(package_status.get("success", False)
+                                 and rehydrate_status.get("success", False)),
+        "package_success": bool(package_status.get("success", False)),
+        "rehydrate_success": bool(rehydrate_status.get("success", False)),
         "genome_fasta_present": bool(genome),
         "gff3_present": bool(gff),
         "cds_fasta_present": bool(cds),
@@ -73,3 +78,6 @@ output = Path(snakemake.output[0])
 output.parent.mkdir(parents=True, exist_ok=True)
 pd.DataFrame(rows, columns=COLUMNS).to_csv(output, sep="\t", index=False)
 logging.info("Inventoried %d accessions from %d extracted files", len(rows), len(all_files))
+logging.info("Missing genome FASTA: %d", sum(not row["genome_fasta_present"] for row in rows))
+logging.info("Missing GFF3: %d", sum(not row["gff3_present"] for row in rows))
+logging.info("Missing protein FASTA: %d", sum(not row["protein_fasta_present"] for row in rows))

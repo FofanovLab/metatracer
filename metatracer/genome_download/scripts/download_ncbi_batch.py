@@ -1,4 +1,4 @@
-"""Download one NCBI Datasets batch without making partial failures fatal."""
+"""Create one dehydrated NCBI Datasets package without hiding its status."""
 
 import json
 import logging
@@ -18,6 +18,7 @@ command = [
     "datasets", "download", "genome", "accession",
     "--inputfile", str(snakemake.input[0]),
     "--include", str(snakemake.params.include),
+    "--dehydrated",
     "--filename", str(archive),
     "--no-progressbar",
 ]
@@ -38,6 +39,9 @@ if not valid_archive:
         pass
 status_path.write_text(json.dumps({
     "success": success,
+    "dehydrated": True,
     "returncode": result.returncode,
     "command": command,
 }, indent=2) + "\n", encoding="utf-8")
+if not success:
+    raise subprocess.CalledProcessError(result.returncode or 1, command)

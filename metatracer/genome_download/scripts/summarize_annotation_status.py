@@ -70,14 +70,18 @@ for column, name in FILE_COLUMNS:
     overall.append({"metric": f"selected_with_{metric_column}",
                     "count": count, "denominator": selected_count,
                     "percent": percent(count, selected_count)})
+    missing = selected_count - count
+    overall.append({"metric": f"selected_missing_{metric_column}",
+                    "count": missing, "denominator": selected_count,
+                    "percent": percent(missing, selected_count)})
 
 source = joined["genome_source_category"].fillna("")
 cds = boolean(joined["cds_fasta_present"])
 for category, metric in [
-    ("isolate-like", "high_quality_isolate_like_with_cds"),
+    ("isolate", "high_quality_isolate_with_cds"),
     ("non-isolate", "mag_sag_environmental_with_cds"),
 ]:
-    category_mask = source.eq("isolate-like") if category == "isolate-like" else ~source.eq("isolate-like")
+    category_mask = source.eq("isolate") if category == "isolate" else ~source.eq("isolate")
     denominator = int((selected & category_mask).sum())
     count = int((selected & category_mask & cds).sum())
     overall.append({"metric": metric, "count": count, "denominator": denominator,
@@ -110,3 +114,8 @@ for path, frame in outputs.items():
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     frame.to_csv(path, sep="\t", index=False)
 logging.info("Summarized %d representatives (%d selected downloads)", len(joined), selected_count)
+for column, name in (("genome_fasta_present", "genome FASTA"),
+                     ("gff3_present", "GFF3"),
+                     ("protein_fasta_present", "protein FASTA")):
+    missing = int((selected & ~boolean(joined[column])).sum())
+    logging.info("Selected accessions missing %s: %d of %d", name, missing, selected_count)

@@ -1,16 +1,50 @@
-gtdb_metadata_url: "https://data.gtdb.ecogenomic.org/releases/latest/bac120_metadata.tsv.gz"
+# Download bacterial metadata, archaeal metadata, or both.
+gtdb_domains:
+  - bacteria
+  # - archaea
+
+gtdb_metadata_urls:
+  bac120: "https://data.gtdb.ecogenomic.org/releases/latest/bac120_metadata.tsv.gz"
+  ar53: "https://data.gtdb.ecogenomic.org/releases/latest/ar53_metadata.tsv.gz"
+
 output_dir: "results"
 resource_dir: "resources"
 log_dir: "logs"
 
-# GTDB representative selection and optional quality filtering.
-filter_to_representatives: true
-exclude_mag_sag_environmental: false
-min_checkm_completeness: 95
-max_checkm_contamination: 5
+# All filters are combined with AND. Set an option to null to disable it.
+# Exact-value lists are case-insensitive.
+accession_filters:
+  representatives_only: true
+  min_checkm_completeness: 95
+  max_checkm_contamination: 5
 
-# Set to 100 for a small end-to-end test, or null for every passing accession.
+  # Allowed values: isolate, mag, sag, unknown. Keeping all values disables
+  # source filtering while retaining the derived genome_source_category column.
+  genome_sources:
+    - isolate
+    - mag
+    - sag
+    - unknown
+
+  # GTDB values commonly include Complete Genome, Chromosome, Scaffold, Contig.
+  assembly_levels: null
+
+  # GCF is RefSeq; GCA is GenBank.
+  accession_prefixes:
+    - GCF
+    - GCA
+
+  # Exact matches against the corresponding GTDB metadata columns.
+  gtdb_type_designations: null
+  ncbi_refseq_categories: null
+
+  # Taxon names omit GTDB rank prefixes, e.g. [Pseudomonadota].
+  # Supported ranks: domain, phylum, class, order, family, genus, species.
+  include_taxa: {}
+  exclude_taxa: {}
+
+# Set to 100 for an end-to-end test or null for every accession passing filters.
 max_accessions: null
 
-datasets_include: "genome,gff3,protein,cds,seq-report"
-batch_size: 500
+datasets_include: "genome,gff3,protein"
+rehydrate_max_workers: 10

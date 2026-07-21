@@ -6,7 +6,8 @@ import pandas as pd
 
 
 BOOL_COLUMNS = [
-    "download_success", "genome_fasta_present", "gff3_present", "cds_fasta_present",
+    "download_success", "package_success", "rehydrate_success",
+    "genome_fasta_present", "gff3_present", "cds_fasta_present",
     "protein_fasta_present", "sequence_report_present", "assembly_data_report_present",
 ]
 PATH_COLUMNS = [
