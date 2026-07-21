@@ -105,7 +105,7 @@ def setup_logging(logfile: Optional[str] = None, verbose: bool = False) -> None:
 
 REPORT_COL_CANDIDATES = {
     "assembly": ["assembly_accession", "assemblyAccession", "assembly_accession_version", "accession"],
-    "taxid": ["tax_id", "taxid", "organism_tax_id", "organism_taxid"],
+    "taxid": ["tax_id", "taxid", "taxId", "organism_tax_id", "organism_taxid"],
 }
 
 ROLLUP_RANK_ORDER = [

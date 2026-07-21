@@ -1,0 +1,6 @@
+name: metatracer-mtsv-index
+channels:
+  - bioconda
+  - conda-forge
+dependencies:
+  - mtsv-tools>=2.1.1

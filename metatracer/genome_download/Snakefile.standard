@@ -1,0 +1,255 @@
+"""Standard user workflow: select genomes, download them, and build MTSv indices."""
+
+configfile: "config.standard.yaml"
+
+OUT = config.get("output_dir", "standard_results").rstrip("/")
+RES = config.get("resource_dir", "standard_resources").rstrip("/")
+LOG = config.get("log_dir", "standard_logs").rstrip("/")
+BUILD = f"{OUT}/reference"
+DATASET_DIR = f"{RES}/ncbi_dataset"
+DATASET_ZIP = f"{RES}/ncbi_dataset.zip"
+ACCESSIONS = f"{OUT}/accessions.txt"
+SELECTION = f"{OUT}/accession_selection.tsv"
+SELECTION_SUMMARY = f"{OUT}/accession_selection_summary.tsv"
+
+source = str(config.get("accession_source", "gtdb")).lower()
+if source not in {"file", "gtdb", "ncbi"}:
+    raise ValueError("accession_source must be file, gtdb, or ncbi")
+
+
+def built_indices(wildcards):
+    checkpoint_output = checkpoints.build_reference_chunks.get(**wildcards).output.chunks
+    chunks = sorted(glob_wildcards(str(checkpoint_output) + "/metatracer_reference.chunk.{chunk}.fasta").chunk)
+    return expand(f"{BUILD}/indices/metatracer_reference.chunk.{{chunk}}.index", chunk=chunks)
+
+
+rule all:
+    input:
+        ACCESSIONS,
+        f"{OUT}/ncbi_datasets_file_inventory.tsv",
+        f"{BUILD}/metatracer_reference.map.tsv",
+        built_indices,
+        f"{OUT}/report/summary.tsv",
+        f"{OUT}/report/index.html",
+
+
+if source == "file":
+    rule select_accessions_from_file:
+        input:
+            config["accession_file"]
+        output:
+            accessions=ACCESSIONS,
+            metadata=SELECTION,
+            summary=SELECTION_SUMMARY,
+        params:
+            maximum=config.get("max_accessions")
+        conda:
+            "envs/python.yaml"
+        log:
+            f"{LOG}/select_accessions.log"
+        script:
+            "scripts/select_accessions_from_file.py"
+
+elif source == "ncbi":
+    rule select_accessions_from_ncbi:
+        output:
+            accessions=ACCESSIONS,
+            metadata=SELECTION,
+            summary=SELECTION_SUMMARY,
+            report=f"{RES}/ncbi_accession_query.jsonl",
+        params:
+            query=config.get("ncbi_query", {}),
+            maximum=config.get("max_accessions")
+        conda:
+            "envs/ncbi_datasets.yaml"
+        log:
+            f"{LOG}/select_accessions.log"
+        script:
+            "scripts/select_accessions_from_ncbi.py"
+
+else:
+    DOMAIN_PREFIX = {"bacteria": "bac120", "archaea": "ar53"}
+    domains = config.get("gtdb_domains", ["bacteria"])
+    if isinstance(domains, str):
+        domains = [domains]
+    domains = [str(value).lower() for value in domains]
+    invalid = sorted(set(domains) - set(DOMAIN_PREFIX))
+    if not domains or invalid:
+        raise ValueError("Invalid gtdb_domains: " + ", ".join(invalid))
+    prefixes = [DOMAIN_PREFIX[value] for value in domains]
+    metadata_tables = expand(f"{RES}/{{prefix}}_metadata.tsv", prefix=prefixes)
+
+    rule download_gtdb_metadata:
+        output:
+            f"{RES}/{{prefix}}_metadata.tsv.gz"
+        params:
+            url=lambda wc: config["gtdb_metadata_urls"][wc.prefix]
+        wildcard_constraints:
+            prefix="bac120|ar53"
+        log:
+            f"{LOG}/download_gtdb_metadata_{{prefix}}.log"
+        shell:
+            """
+            mkdir -p $(dirname {output:q}) $(dirname {log:q})
+            curl -L --fail --retry 4 --retry-delay 10 {params.url:q} -o {output:q} > {log:q} 2>&1
+            """
+
+    rule decompress_gtdb_metadata:
+        input:
+            f"{RES}/{{prefix}}_metadata.tsv.gz"
+        output:
+            f"{RES}/{{prefix}}_metadata.tsv"
+        wildcard_constraints:
+            prefix="bac120|ar53"
+        log:
+            f"{LOG}/decompress_gtdb_metadata_{{prefix}}.log"
+        shell:
+            "gzip -cd {input:q} > {output:q} 2> {log:q}"
+
+    rule select_accessions_from_gtdb:
+        input:
+            metadata_tables
+        output:
+            representatives=f"{OUT}/gtdb_representatives.tsv",
+            kept=SELECTION,
+            accessions=ACCESSIONS,
+            taxonomy=f"{OUT}/gtdb_taxonomy.tsv",
+            summary=SELECTION_SUMMARY,
+        params:
+            filters=config.get("accession_filters", {}),
+            max_accessions=config.get("max_accessions"),
+        conda:
+            "envs/python.yaml"
+        log:
+            f"{LOG}/select_accessions.log"
+        script:
+            "scripts/parse_gtdb_metadata.py"
+
+
+rule download_ncbi_dataset:
+    input:
+        ACCESSIONS
+    output:
+        archive=DATASET_ZIP,
+        status=f"{RES}/ncbi_dataset.status.json",
+    params:
+        include=config.get("datasets_include", "genome"),
+        attempts=config.get("datasets_download_attempts", 5),
+        retry_delay=config.get("datasets_retry_delay_seconds", 30),
+    conda:
+        "envs/ncbi_datasets.yaml"
+    log:
+        f"{LOG}/download_ncbi_dataset.log"
+    script:
+        "scripts/download_ncbi_batch.py"
+
+
+rule unpack_ncbi_dataset:
+    input:
+        archive=DATASET_ZIP,
+        status=f"{RES}/ncbi_dataset.status.json",
+    output:
+        directory(DATASET_DIR)
+    conda:
+        "envs/python.yaml"
+    log:
+        f"{LOG}/unpack_ncbi_dataset.log"
+    script:
+        "scripts/unpack_ncbi_batch.py"
+
+
+rule rehydrate_ncbi_dataset:
+    input:
+        dataset=DATASET_DIR,
+        package_status=f"{RES}/ncbi_dataset.status.json",
+    output:
+        status=f"{RES}/ncbi_dataset.rehydrate.status.json",
+    params:
+        max_workers=config.get("rehydrate_max_workers", 10)
+    conda:
+        "envs/ncbi_datasets.yaml"
+    log:
+        f"{LOG}/rehydrate_ncbi_dataset.log"
+    script:
+        "scripts/rehydrate_ncbi_batch.py"
+
+
+rule inventory_ncbi_dataset:
+    input:
+        accessions=ACCESSIONS,
+        dataset=DATASET_DIR,
+        package_status=f"{RES}/ncbi_dataset.status.json",
+        rehydrate_status=f"{RES}/ncbi_dataset.rehydrate.status.json",
+    output:
+        f"{OUT}/ncbi_datasets_file_inventory.tsv"
+    conda:
+        "envs/python.yaml"
+    log:
+        f"{LOG}/inventory_ncbi_dataset.log"
+    script:
+        "scripts/inventory_ncbi_dataset.py"
+
+
+checkpoint build_reference_chunks:
+    input:
+        dataset=DATASET_DIR,
+        status=f"{RES}/ncbi_dataset.rehydrate.status.json",
+    output:
+        chunks=directory(f"{BUILD}/chunks"),
+        mapping=f"{BUILD}/metatracer_reference.map.tsv",
+        summary=f"{BUILD}/metatracer_reference.summary.txt",
+    params:
+        data=f"{DATASET_DIR}/ncbi_dataset/data",
+        report=f"{DATASET_DIR}/ncbi_dataset/data/assembly_data_report.jsonl",
+        max_mb=config.get("reference_chunk_size_mb", 1000),
+        script="../reference_build.py",
+    conda:
+        "envs/reference_build.yaml"
+    log:
+        f"{LOG}/build_reference.log"
+    shell:
+        """
+        python {params.script:q} --data-dir {params.data:q} --report {params.report:q} \
+          --out-dir {output.chunks:q} --max-size-mb {params.max_mb:q} \
+          --map-out {output.mapping:q} --summary-out {output.summary:q} --log {log:q}
+        """
+
+
+rule build_mtsv_index:
+    input:
+        f"{BUILD}/chunks/metatracer_reference.chunk.{{chunk}}.fasta"
+    output:
+        f"{BUILD}/indices/metatracer_reference.chunk.{{chunk}}.index"
+    params:
+        occ=config.get("bwt_occ_sample_rate", 64),
+        sa=config.get("sa_sample_rate", 32),
+    conda:
+        "envs/mtsv_index.yaml"
+    log:
+        f"{LOG}/build_mtsv_index_{{chunk}}.log"
+    shell:
+        """
+        mkdir -p $(dirname {output:q}) $(dirname {log:q})
+        mtsv-build --fasta {input:q} --index {output:q} \
+          --sample-interval {params.occ:q} --sa-sample {params.sa:q} > {log:q} 2>&1
+        """
+
+
+rule create_user_report:
+    input:
+        selection=SELECTION_SUMMARY,
+        inventory=f"{OUT}/ncbi_datasets_file_inventory.tsv",
+        build=f"{BUILD}/metatracer_reference.summary.txt",
+        indices=built_indices,
+    output:
+        summary=f"{OUT}/report/summary.tsv",
+        html=f"{OUT}/report/index.html",
+    params:
+        source=source,
+        includes=config.get("datasets_include", "genome"),
+    conda:
+        "envs/python.yaml"
+    log:
+        f"{LOG}/create_user_report.log"
+    script:
+        "scripts/create_user_report.py"

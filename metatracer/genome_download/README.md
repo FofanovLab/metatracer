@@ -1,11 +1,72 @@
-# GTDB bacterial and archaeal representative preprocessing
+# Genome download and reference workflows
+
+This directory intentionally maintains two entry-point Snakefiles:
+
+- `Snakefile.standard` is the supported user workflow. It selects accessions
+  from a text file, GTDB metadata, or an NCBI Datasets query; downloads genome
+  data; builds the MetaTracer FASTA chunks and MTSv indices; and produces a
+  compact HTML build report.
+- `Snakefile` is the publication/debug workflow. It retains detailed metadata,
+  annotation inventories, supplementary tables, and one-time audit summaries.
+
+Each has its own config file and output directories, so the workflows can be
+run in the same checkout without overwriting each other's products.
+
+## Standard user build
+
+Copy or edit `config.standard.yaml`, then run:
+
+```bash
+snakemake --snakefile Snakefile.standard \
+  --configfile config.standard.yaml --cores 8 --use-conda --rerun-incomplete
+```
+
+Choose one accession source with `accession_source`:
+
+- `file`: reads `accession_file`, ignores blank/comment lines, normalizes
+  `RS_`/`GB_` prefixes, validates accessions, and removes duplicates.
+- `gtdb`: downloads the configured bacterial and/or archaeal metadata and
+  applies `accession_filters`. The supplied defaults form a medium,
+  gene-friendly collection: GTDB representatives, at least 95% estimated
+  completeness, at most 5% estimated contamination, isolate or MAG source,
+  and scaffold-or-better assembly level. Add `Contig` to `assembly_levels` or
+  set it to `null` for broader environmental coverage.
+- `ncbi`: runs `datasets summary genome taxon` using the options under
+  `ncbi_query`, including taxon, RefSeq/GenBank source, assembly level,
+  annotation, MAG, type-material, reference, atypical, and release-date
+  filters.
+
+Set `gtdb_domains` to `[bacteria]`, `[archaea]`, or both. `max_accessions` can
+cap any source for testing. The default `datasets_include: genome` downloads
+only genome FASTA plus package metadata. Use `genome,gff3,protein` when the
+NCBI annotations should also be retained; an accession is still inventoried
+when an optional GFF3 or protein FASTA is unavailable.
+
+Standard outputs are under `standard_results/`:
+
+- `accessions.txt` and `accession_selection.tsv`: the exact retained list and
+  available source metadata.
+- `accession_selection_summary.tsv`: counts before and after validation,
+  filters, deduplication, and optional limiting.
+- `ncbi_datasets_file_inventory.tsv`: one row per requested accession with
+  genome, GFF3, CDS, and protein availability.
+- `reference/`: reference FASTA chunks, sequence-to-taxonomy map, build
+  summary, and MTSv index files.
+- `report/index.html`: a self-contained end-of-build overview with download,
+  missing-file, reference, and index counts. `report/summary.tsv` contains the
+  same headline metrics for scripts.
+
+Rule-specific diagnostics are written under `standard_logs/`; downloaded
+resources and NCBI status files are under `standard_resources/`.
+
+## Publication and debug preprocessing
 
 This Snakemake workflow identifies GTDB bacterial and/or archaeal representative genomes,
 applies optional quality/source filters, downloads available files through NCBI
 Datasets, inventories annotation files, and reports how many representatives
 have defined CDS sequences.
 
-The workflow is deliberately a preprocessing and audit workflow. It does not
+This workflow is deliberately a preprocessing and audit workflow. It does not
 yet build a MetaTracer reference database.
 
 The workflow is self-contained in `genome_download/`. Run Snakemake from that
@@ -36,13 +97,14 @@ max_accessions: 100
 Inspect the planned jobs:
 
 ```bash
-snakemake --dry-run --printshellcmds
+snakemake --snakefile Snakefile --configfile config.yaml --dry-run --printshellcmds
 ```
 
 Run with four cores and Conda environments:
 
 ```bash
-snakemake --cores 4 --use-conda --rerun-incomplete --printshellcmds
+snakemake --snakefile Snakefile --configfile config.yaml \
+  --cores 4 --use-conda --rerun-incomplete --printshellcmds
 ```
 
 For a complete run, change `max_accessions` back to `null`. The accession order

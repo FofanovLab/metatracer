@@ -1,0 +1,7 @@
+name: metatracer-reference-build
+channels:
+  - conda-forge
+dependencies:
+  - python>=3.10
+  - biopython>=1.80
+  - ete3>=3.1

@@ -1,0 +1,58 @@
+# Standard user workflow. Run with:
+# snakemake -s Snakefile.standard --configfile config.standard.yaml --use-conda --cores 8
+
+# Choose: file, gtdb, or ncbi.
+accession_source: gtdb
+
+# Used when accession_source: file.
+accession_file: "accessions.txt"
+
+# Used when accession_source: gtdb.
+gtdb_domains: [bacteria]
+gtdb_metadata_urls:
+  bac120: "https://data.gtdb.ecogenomic.org/releases/latest/bac120_metadata.tsv.gz"
+  ar53: "https://data.gtdb.ecogenomic.org/releases/latest/ar53_metadata.tsv.gz"
+accession_filters:
+  representatives_only: true
+  min_checkm_completeness: 95
+  max_checkm_contamination: 5
+  genome_sources: [isolate, mag]
+  # Excluding contig-level assemblies keeps this a medium-sized, gene-friendly
+  # selection while retaining high-quality MAGs assembled to scaffold or better.
+  assembly_levels: [Complete Genome, Chromosome, Scaffold]
+  accession_prefixes: [GCF, GCA]
+  gtdb_type_designations: null
+  ncbi_refseq_categories: null
+  include_taxa: {}
+  exclude_taxa: {}
+
+# Used when accession_source: ncbi. `taxon` accepts a name or NCBI TaxID.
+ncbi_query:
+  taxon: bacteria
+  assembly_source: all       # all, RefSeq, or GenBank
+  assembly_levels: []        # complete, chromosome, scaffold, contig
+  annotated_only: false
+  mag: all                   # all, only, or exclude
+  reference_only: false
+  type_material_only: false
+  exclude_atypical: true
+  released_after: null
+  released_before: null
+
+# null keeps every selected accession. Primarily useful for small test builds.
+max_accessions: null
+
+# Use "genome" for the smallest uniform build. Add gff3,protein to retain NCBI
+# annotations when available: "genome,gff3,protein".
+datasets_include: "genome"
+datasets_download_attempts: 5
+datasets_retry_delay_seconds: 30
+rehydrate_max_workers: 10
+
+reference_chunk_size_mb: 1000
+bwt_occ_sample_rate: 64
+sa_sample_rate: 32
+
+output_dir: "standard_results"
+resource_dir: "standard_resources"
+log_dir: "standard_logs"
