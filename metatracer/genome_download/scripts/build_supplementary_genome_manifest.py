@@ -1,6 +1,7 @@
 """Create an auditable GTDB/NCBI manifest for every requested genome."""
 
 import json
+import hashlib
 import logging
 from pathlib import Path
 from typing import Dict
@@ -34,6 +35,13 @@ GTDB_COLUMNS = [
     "ncbi_species_taxid", "ncbi_taxid",
 ]
 
+NCBI_RANK_ORDER = [
+    "superkingdom", "kingdom", "phylum", "class", "order", "family",
+    "genus", "species", "subspecies", "strain", "isolate",
+]
+SYNTHETIC_GTDB_MIN = 1_000_000_000
+SYNTHETIC_GTDB_MAX = 1_999_999_999
+
 
 def text(value) -> str:
     return "" if value is None else str(value)
@@ -61,6 +69,42 @@ def report_row(record: dict) -> dict:
         "ncbi_annotation_status": text(annotation.get("status")),
         "ncbi_annotation_report_url": text(annotation.get("reportUrl")),
     }
+
+
+def assign_gtdb_numeric_ids(cluster_ids, reserved_ids):
+    """Assign stable, manifest-local positive integers to GTDB species clusters."""
+    assigned = {}
+    used = {int(value) for value in reserved_ids if str(value).isdigit()}
+    width = SYNTHETIC_GTDB_MAX - SYNTHETIC_GTDB_MIN + 1
+    for cluster_id in sorted({str(value).strip() for value in cluster_ids if str(value).strip()}):
+        digest = hashlib.sha256(cluster_id.encode("utf-8")).digest()
+        candidate = SYNTHETIC_GTDB_MIN + (int.from_bytes(digest[:8], "big") % width)
+        start = candidate
+        while candidate in used:
+            candidate = SYNTHETIC_GTDB_MIN + ((candidate - SYNTHETIC_GTDB_MIN + 1) % width)
+            if candidate == start:
+                raise RuntimeError("Exhausted the synthetic GTDB taxonomy-ID namespace")
+        assigned[cluster_id] = candidate
+        used.add(candidate)
+    return assigned
+
+
+def ncbi_taxid_ranks(taxids):
+    try:
+        from ete3 import NCBITaxa
+    except Exception as error:
+        raise RuntimeError("ete3 is required to determine NCBI TaxID ranks") from error
+    unique = sorted({int(value) for value in taxids if str(value).isdigit()})
+    if not unique:
+        return {}
+    logging.info("Resolving ranks for %d unique NCBI TaxIDs", len(unique))
+    return {str(taxid): rank for taxid, rank in NCBITaxa().get_rank(unique).items()}
+
+
+def column_or_blank(frame, column):
+    if column in frame.columns:
+        return frame[column].fillna("").astype(str)
+    return pd.Series("", index=frame.index, dtype=str)
 
 
 Path(snakemake.log[0]).parent.mkdir(parents=True, exist_ok=True)
@@ -126,10 +170,32 @@ if "gtdb_metadata_ncbi_taxid" in manifest.columns:
         "", pd.NA
     ).fillna(manifest["gtdb_metadata_ncbi_taxid"]).fillna("")
 
+# A GTDB species cluster is anchored by its representative genome accession.
+# The synthetic integer is for tools such as MTSv and is not an NCBI TaxID.
+manifest["gtdb_species_id"] = column_or_blank(manifest, "species").str.strip()
+manifest["gtdb_species_cluster_id"] = column_or_blank(
+    manifest, "gtdb_genome_representative"
+).str.replace(r"^(RS_|GB_)", "", regex=True).str.strip()
+gtdb_id_map = assign_gtdb_numeric_ids(
+    manifest["gtdb_species_cluster_id"], manifest["ncbi_taxid"]
+)
+manifest["gtdb_species_numeric_id"] = manifest["gtdb_species_cluster_id"].map(
+    lambda cluster_id: str(gtdb_id_map.get(cluster_id, ""))
+)
+manifest["gtdb_species_numeric_id_scheme"] = manifest[
+    "gtdb_species_numeric_id"
+].map(lambda value: "metatracer_gtdb_sha256_v1" if value else "")
+
+rank_by_taxid = ncbi_taxid_ranks(manifest["ncbi_taxid"])
+manifest["ncbi_taxid_rank"] = manifest["ncbi_taxid"].map(rank_by_taxid).fillna("")
+
 leading = [
     "ncbi_accession", "ncbi_report_accession", "ncbi_current_accession",
     "ncbi_paired_accession", "ncbi_source_database", "ncbi_taxid",
-    "ncbi_organism_name", "gtdb_metadata_set", "gtdb_taxonomy", "species",
+    "ncbi_taxid_rank", "ncbi_organism_name", "gtdb_metadata_set",
+    "gtdb_taxonomy", "species", "gtdb_species_id",
+    "gtdb_species_cluster_id", "gtdb_species_numeric_id",
+    "gtdb_species_numeric_id_scheme",
     "gtdb_genome_representative", "genome_source_category",
     "genome_fasta_present", "gff3_present", "protein_fasta_present",
     "genome_fasta_path", "gff3_path", "protein_fasta_path",
@@ -154,6 +220,18 @@ annotation = manifest["ncbi_annotation_available"].astype(str).str.lower().isin(
     {"true", "t", "1"}
 )
 logging.info("Requested accessions: %d", len(manifest))
+missing_ncbi = manifest["ncbi_taxid"].astype(str).str.strip().eq("")
+missing_gtdb_species = manifest["gtdb_species_id"].astype(str).str.strip().eq("")
+missing_gtdb_cluster = manifest["gtdb_species_cluster_id"].astype(str).str.strip().eq("")
+logging.info("Rows missing NCBI TaxID: %d", int(missing_ncbi.sum()))
+logging.info("Rows missing GTDB species ID/name: %d", int(missing_gtdb_species.sum()))
+logging.info("Rows missing GTDB species-cluster ID: %d", int(missing_gtdb_cluster.sum()))
+rank_counts = manifest.loc[~missing_ncbi, "ncbi_taxid_rank"].replace("", "unknown").value_counts()
+for rank, count in rank_counts.items():
+    logging.info("NCBI TaxID rank %s: %d", rank, int(count))
+observed = set(rank_counts.index) - {"unknown", "no rank"}
+highest = next((rank for rank in NCBI_RANK_ORDER if rank in observed), "unknown")
+logging.info("Highest (most general) NCBI TaxID rank observed: %s", highest)
 logging.info("Downloaded genome FASTA: %d", int(genomes.sum()))
 logging.info("With GFF3: %d; missing GFF3: %d", int(gff.sum()), int((~gff).sum()))
 logging.info(

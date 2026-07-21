@@ -180,13 +180,15 @@ checkpoint build_reference_chunks:
     input:
         dataset=DATASET_DIR,
         status=f"{RES}/ncbi_dataset.rehydrate.status.json",
+        manifest=f"{OUT}/supplementary_genome_manifest.tsv",
     output:
         chunks=directory(f"{BUILD}/chunks"),
         mapping=f"{BUILD}/metatracer_reference.map.tsv",
         summary=f"{BUILD}/metatracer_reference.summary.txt",
     params:
         data=f"{DATASET_DIR}/ncbi_dataset/data",
-        report=f"{DATASET_DIR}/ncbi_dataset/data/assembly_data_report.jsonl",
+        report=f"{OUT}/supplementary_genome_manifest.tsv",
+        taxonomy_source=config.get("reference_taxonomy_source", "ncbi_then_gtdb"),
         max_mb=config.get("reference_chunk_size_mb", 1000),
         script=workflow.source_path("../reference_build.py"),
     conda:
@@ -199,7 +201,8 @@ checkpoint build_reference_chunks:
         """
         python {params.script:q} --data-dir {params.data:q} --report {params.report:q} \
           --out-dir {output.chunks:q} --max-size-mb {params.max_mb:q} \
-          --map-out {output.mapping:q} --summary-out {output.summary:q} --log {log:q}
+          --map-out {output.mapping:q} --summary-out {output.summary:q} \
+          --taxonomy-source {params.taxonomy_source:q} --log {log:q}
         """
 
 

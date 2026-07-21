@@ -23,6 +23,7 @@ logging.basicConfig(filename=str(log_path), level=logging.INFO,
 
 selection = read_tsv(snakemake.input.selection)
 inventory = read_tsv(snakemake.input.inventory)
+manifest = read_tsv(snakemake.input.manifest)
 selection_counts = {row.get("stage", ""): int(float(row.get("count", 0) or 0))
                     for row in selection}
 selected = selection_counts.get("kept_accessions", len(inventory))
@@ -47,6 +48,21 @@ metrics.extend([
     ("protein_fasta_missing", len(inventory) - dict(metrics).get("protein_fasta_present", 0)),
     ("reference_indices_built", len(snakemake.input.indices)),
 ])
+ncbi_taxids = sum(bool(row.get("ncbi_taxid", "").strip()) for row in manifest)
+gtdb_clusters = sum(bool(row.get("gtdb_species_cluster_id", "").strip()) for row in manifest)
+metrics.extend([
+    ("manifest_rows", len(manifest)),
+    ("ncbi_taxid_present", ncbi_taxids),
+    ("ncbi_taxid_missing", len(manifest) - ncbi_taxids),
+    ("gtdb_species_cluster_id_present", gtdb_clusters),
+    ("gtdb_species_cluster_id_missing", len(manifest) - gtdb_clusters),
+])
+rank_counts = {}
+for row in manifest:
+    rank = row.get("ncbi_taxid_rank", "").strip() or "unknown"
+    rank_counts[rank] = rank_counts.get(rank, 0) + 1
+for rank, count in sorted(rank_counts.items()):
+    metrics.append(("ncbi_taxid_rank_{}".format(rank.replace(" ", "_")), count))
 
 build_lines = Path(snakemake.input.build).read_text(encoding="utf-8", errors="replace").splitlines()
 for line in build_lines:

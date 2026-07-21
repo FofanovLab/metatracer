@@ -50,6 +50,9 @@ datasets_retry_delay_seconds: 30
 rehydrate_max_workers: 10
 
 reference_chunk_size_mb: 1000
+# ncbi, gtdb, or ncbi_then_gtdb. GTDB IDs are available when GTDB metadata was
+# used to select the accessions.
+reference_taxonomy_source: ncbi_then_gtdb
 bwt_occ_sample_rate: 64
 sa_sample_rate: 32
 

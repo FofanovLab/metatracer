@@ -51,6 +51,10 @@ Standard outputs are under `standard_results/`:
   filters, deduplication, and optional limiting.
 - `ncbi_datasets_file_inventory.tsv`: one row per requested accession with
   genome, GFF3, CDS, and protein availability.
+- `genome_manifest.tsv`: downloaded-file availability, NCBI TaxID and rank,
+  GTDB taxonomy when the GTDB source is used, and explicit GTDB species-cluster
+  identifiers. The manifest log reports missing NCBI and GTDB identifiers and
+  the distribution of NCBI TaxID ranks.
 - `reference/`: reference FASTA chunks, sequence-to-taxonomy map, build
   summary, and MTSv index files.
 - `report/index.html`: a self-contained end-of-build overview with download,
@@ -205,7 +209,10 @@ All final tables are written under `results/` by default:
   file availability and paths, NCBI TaxID and organism metadata, GTDB taxonomy
   and species identity, and NCBI annotation provider, pipeline, method, software
   version, release date, status, and report URL when available. Blank annotation
-  fields mean NCBI did not report that information.
+  fields mean NCBI did not report that information. It also records
+  `ncbi_taxid_rank`, `gtdb_species_cluster_id`, and a synthetic
+  `gtdb_species_numeric_id` for reference construction. The synthetic value is
+  a MetaTracer identifier, not an NCBI TaxID.
 - `gtdb_representatives_with_ncbi_annotation_status.tsv`: filtered GTDB rows
   joined to the NCBI inventory.
 - `summary_annotation_status.tsv`: overall availability counts and percentages.
@@ -228,6 +235,18 @@ Reference and index timing/resource measurements are written under
 chunking step; `build_mtsv_index_<chunk>.tsv` measures each index independently.
 Snakemake benchmark tables include elapsed wall time, CPU time, maximum resident
 memory, I/O, and average load where supported by the execution platform.
+
+Reference construction reads taxonomy IDs from the manifest. Configure
+`reference_taxonomy_source` as `ncbi`, `gtdb`, or `ncbi_then_gtdb`. The default
+uses an NCBI TaxID when present and otherwise uses the manifest's synthetic GTDB
+species-cluster integer. The reference mapping records `taxid_source` so mixed
+ID namespaces remain auditable.
+
+Synthetic GTDB IDs satisfy the positive-integer grouping needed in MTSv index
+headers, but they are not present in the NCBI taxonomy database. NCBI-aware
+name, lineage, LCA, or genus-level operations must therefore consult the GTDB
+lineage stored in the manifest (or a future generated GTDB taxonomy tree)
+instead of sending these IDs to an NCBI taxonomy resolver.
 
 When `max_accessions` is set, the kept metadata, taxonomy, accession list, and
 annotation percentages all describe that truncated selection. The accession

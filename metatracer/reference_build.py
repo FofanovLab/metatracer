@@ -22,12 +22,14 @@ Terminology
     The first token of each FASTA record header before the first space
     (i.e., Bio.SeqIO record.id, often "NC_..." or "NZ_...")
 
-Input report
-------------
---report is a Datasets-style report mapping assembly accession -> taxid.
+Input taxonomy report or manifest
+---------------------------------
+--report maps assembly accession -> taxonomy ID.
 Supported:
   - TSV/CSV with columns including assembly_accession and tax_id (names vary; auto-detected)
   - JSON Lines (.jsonl) with common nesting supported
+  - MetaTracer supplementary manifests with ncbi_taxid and/or
+    gtdb_species_numeric_id, selected by --taxonomy-source
 
 Outputs
 -------
@@ -104,7 +106,7 @@ def setup_logging(logfile: Optional[str] = None, verbose: bool = False) -> None:
 # ----------------------------
 
 REPORT_COL_CANDIDATES = {
-    "assembly": ["assembly_accession", "assemblyAccession", "assembly_accession_version", "accession"],
+    "assembly": ["assembly_accession", "assemblyAccession", "assembly_accession_version", "ncbi_accession", "accession"],
     "taxid": ["tax_id", "taxid", "taxId", "organism_tax_id", "organism_taxid"],
 }
 
@@ -305,19 +307,62 @@ def read_assembly_taxid_report(report_path: Path) -> Dict[str, int]:
         return mapping
 
 
+def read_assembly_taxonomy_report(
+    report_path: Path, taxonomy_source: str
+) -> Tuple[Dict[str, int], Dict[str, str]]:
+    """Read IDs plus provenance, with special handling for MetaTracer manifests."""
+    name = report_path.name.lower()
+    is_delimited = any(
+        name.endswith(suffix) for suffix in (".tsv", ".tsv.gz", ".csv", ".csv.gz")
+    )
+    if not is_delimited:
+        mapping = read_assembly_taxid_report(report_path)
+        return mapping, {assembly: "ncbi" for assembly in mapping}
+
+    delimiter = _sniff_tsv_delim(report_path)
+    opener = gzip.open if report_path.suffix == ".gz" else open
+    with opener(report_path, "rt", encoding="utf-8", errors="replace", newline="") as handle:
+        reader = csv.DictReader(handle, delimiter=delimiter)
+        fields = set(reader.fieldnames or [])
+        is_manifest = "ncbi_accession" in fields and (
+            "ncbi_taxid" in fields or "gtdb_species_numeric_id" in fields
+        )
+        if not is_manifest:
+            mapping = read_assembly_taxid_report(report_path)
+            return mapping, {assembly: "ncbi" for assembly in mapping}
+
+        mapping: Dict[str, int] = {}
+        sources: Dict[str, str] = {}
+        for row in reader:
+            assembly = normalize_assembly_accession(row.get("ncbi_accession", ""))
+            ncbi = str(row.get("ncbi_taxid", "")).strip()
+            gtdb = str(row.get("gtdb_species_numeric_id", "")).strip()
+            if taxonomy_source == "ncbi":
+                selected, source = ncbi, "ncbi"
+            elif taxonomy_source == "gtdb":
+                selected, source = gtdb, "gtdb"
+            elif ncbi.isdigit():
+                selected, source = ncbi, "ncbi"
+            else:
+                selected, source = gtdb, "gtdb"
+            if assembly and selected.isdigit() and int(selected) > 0:
+                mapping[assembly] = int(selected)
+                sources[assembly] = source
+        return mapping, sources
+
+
 def build_species_or_higher_rollup(
     taxids: Iterable[int],
 ) -> Tuple[Dict[int, int], Dict[int, str]]:
+    unique_taxids = sorted({int(t) for t in taxids if t is not None})
+    if not unique_taxids:
+        return {}, {}
     try:
         from ete3 import NCBITaxa
     except Exception as e:
         raise SystemExit(
             "ete3 is required for taxid rollup. Install with: pip install ete3"
         ) from e
-
-    unique_taxids = sorted({int(t) for t in taxids if t is not None})
-    if not unique_taxids:
-        return {}, {}
 
     ncbi = NCBITaxa()
 
@@ -510,6 +555,7 @@ def build_reference(
     index_gff: bool,
     force_reindex: bool,
     mapping_only: bool,
+    taxonomy_source: str,
 ) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -517,15 +563,19 @@ def build_reference(
     if not mapping_only and max_bytes <= 0:
         raise SystemExit("--max-size-mb must be > 0")
 
-    asm_to_taxid = read_assembly_taxid_report(report_path)
+    asm_to_taxid, asm_taxid_source = read_assembly_taxonomy_report(
+        report_path, taxonomy_source
+    )
     if not asm_to_taxid:
         raise SystemExit(
             f"No assembly->taxid mappings found in report: {report_path}")
 
     logging.info(f"Report mappings loaded: {len(asm_to_taxid):,} assemblies")
-    rollup_by_taxid, rollup_rank_by_taxid = build_species_or_higher_rollup(
-        asm_to_taxid.values()
-    )
+    ncbi_taxids = [
+        taxid for assembly, taxid in asm_to_taxid.items()
+        if asm_taxid_source.get(assembly) == "ncbi"
+    ]
+    rollup_by_taxid, rollup_rank_by_taxid = build_species_or_higher_rollup(ncbi_taxids)
     asm_to_taxid = {
         asm: rollup_by_taxid.get(taxid, taxid) for asm, taxid in asm_to_taxid.items()
     }
@@ -534,6 +584,9 @@ def build_reference(
         rolled_rank_by_taxid.setdefault(
             rolled_taxid, rollup_rank_by_taxid.get(original_taxid, "unknown")
         )
+    for assembly, taxid in asm_to_taxid.items():
+        if asm_taxid_source.get(assembly) == "gtdb":
+            rolled_rank_by_taxid[taxid] = "species"
     logging.info(
         "Rolled up %d unique taxids to species-or-higher (%d unique after rollup)",
         len(rollup_by_taxid),
@@ -545,6 +598,7 @@ def build_reference(
         "seqid",
         "assembly",
         "taxid",
+        "taxid_source",
         "header",
         "description",
         "gff",
@@ -644,6 +698,7 @@ def build_reference(
                             "seqid": accession_key,
                             "assembly": assembly_dir_name,
                             "taxid": taxid,  # immediately after Assembly
+                            "taxid_source": asm_taxid_source.get(assembly, "unknown"),
                             "header": contig_accession,
                             "description": description,
                             "gff": gff_path,
@@ -673,6 +728,10 @@ def build_reference(
         s.write(f"Assemblies processed: {assemblies_processed:,}\n")
         s.write(f"Unique taxa:          {len(taxa_seen):,}\n")
         s.write(f"Total sequences:      {accession_key - 1:,}\n")
+        s.write(f"Taxonomy ID policy:   {taxonomy_source}\n")
+        source_counts = Counter(asm_taxid_source.get(assembly, "unknown") for assembly in asm_to_taxid)
+        for source, count in sorted(source_counts.items()):
+            s.write(f"Assemblies using {source.upper()} IDs: {count:,}\n")
         s.write(
             f"Chunk max size (MB):  {'N/A (mapping-only mode)' if mapping_only else f'{max_size_mb:,}'}\n")
         s.write(f"Chunks written:       {chunks_written:,}\n")
@@ -700,7 +759,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--data-dir", required=True,
                     help="Base dir containing assembly subdirs (GCF_*/).")
     ap.add_argument("--report", required=True,
-                    help="Datasets report mapping assembly -> taxid (TSV/CSV or JSONL).")
+                    help="Datasets report or MetaTracer manifest mapping assembly -> taxonomy ID.")
+    ap.add_argument(
+        "--taxonomy-source", choices=["ncbi", "gtdb", "ncbi_then_gtdb"],
+        default="ncbi",
+        help="ID policy for a MetaTracer manifest (default: ncbi).",
+    )
     ap.add_argument("--out-dir", required=True,
                     help="Output directory for chunks + mapping + summary.")
     ap.add_argument("--max-size-mb", type=int, default=10000,
@@ -745,6 +809,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         index_gff=args.index_gff,
         force_reindex=args.force_reindex,
         mapping_only=args.mapping_only,
+        taxonomy_source=args.taxonomy_source,
     )
     return 0
 
