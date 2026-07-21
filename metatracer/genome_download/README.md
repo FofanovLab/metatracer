@@ -138,6 +138,11 @@ All final tables are written under `results/` by default:
   `logs/parse_gtdb_metadata.log`.
 - `ncbi_datasets_file_inventory.tsv`: one row per requested accession and paths
   to every detected file type.
+- `supplementary_genome_manifest.tsv`: one row per requested accession combining
+  file availability and paths, NCBI TaxID and organism metadata, GTDB taxonomy
+  and species identity, and NCBI annotation provider, pipeline, method, software
+  version, release date, status, and report URL when available. Blank annotation
+  fields mean NCBI did not report that information.
 - `gtdb_representatives_with_ncbi_annotation_status.tsv`: filtered GTDB rows
   joined to the NCBI inventory.
 - `summary_annotation_status.tsv`: overall availability counts and percentages.

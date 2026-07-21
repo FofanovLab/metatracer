@@ -29,6 +29,7 @@ FINAL_OUTPUTS = [
     f"{OUT}/gtdb_representative_taxonomy.tsv",
     f"{OUT}/gtdb_accession_filter_summary.tsv",
     f"{OUT}/ncbi_datasets_file_inventory.tsv",
+    f"{OUT}/supplementary_genome_manifest.tsv",
     f"{OUT}/gtdb_representatives_with_ncbi_annotation_status.tsv",
     f"{OUT}/summary_annotation_status.tsv",
     f"{OUT}/summary_by_genome_category.tsv",
@@ -157,6 +158,22 @@ rule inventory_ncbi_dataset:
         f"{LOG}/inventory_ncbi_dataset.log"
     script:
         "scripts/inventory_ncbi_dataset.py"
+
+
+rule build_supplementary_genome_manifest:
+    input:
+        metadata=f"{OUT}/gtdb_kept_accessions_metadata.tsv",
+        inventory=f"{OUT}/ncbi_datasets_file_inventory.tsv",
+        dataset=DATASET_DIR,
+        rehydrate_status=f"{RES}/ncbi_dataset.rehydrate.status.json",
+    output:
+        f"{OUT}/supplementary_genome_manifest.tsv"
+    conda:
+        "envs/python.yaml"
+    log:
+        f"{LOG}/build_supplementary_genome_manifest.log"
+    script:
+        "scripts/build_supplementary_genome_manifest.py"
 
 rule join_annotation_status:
     input:
