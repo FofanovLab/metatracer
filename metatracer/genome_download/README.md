@@ -210,9 +210,9 @@ All final tables are written under `results/` by default:
   and species identity, and NCBI annotation provider, pipeline, method, software
   version, release date, status, and report URL when available. Blank annotation
   fields mean NCBI did not report that information. It also records
-  `ncbi_taxid_rank`, `gtdb_species_cluster_id`, and a synthetic
-  `gtdb_species_numeric_id` for reference construction. The synthetic value is
-  a MetaTracer identifier, not an NCBI TaxID.
+  `ncbi_taxid_rank`, `gtdb_species_cluster_id`, and a reversible
+  `gtdb_representative_code` for reference construction. The code encodes the
+  complete GCF/GCA representative accession and is not an NCBI TaxID.
 - `gtdb_representatives_with_ncbi_annotation_status.tsv`: filtered GTDB rows
   joined to the NCBI inventory.
 - `summary_annotation_status.tsv`: overall availability counts and percentages.
@@ -238,15 +238,26 @@ memory, I/O, and average load where supported by the execution platform.
 
 Reference construction reads taxonomy IDs from the manifest. Configure
 `reference_taxonomy_source` as `ncbi`, `gtdb`, or `ncbi_then_gtdb`. The default
-uses an NCBI TaxID when present and otherwise uses the manifest's synthetic GTDB
-species-cluster integer. The reference mapping records `taxid_source` so mixed
-ID namespaces remain auditable.
+uses the NCBI species ancestor when one exists and otherwise uses the encoded
+GTDB representative accession. Strict NCBI mode filters a missing TaxID or a
+TaxID with no species ancestor; strict GTDB mode always uses the representative
+code. The reference mapping records `taxid_source` so mixed ID namespaces remain
+auditable.
 
-Synthetic GTDB IDs satisfy the positive-integer grouping needed in MTSv index
-headers, but they are not present in the NCBI taxonomy database. NCBI-aware
+GTDB representative codes satisfy the positive-integer grouping needed in MTSv
+index headers, but they are not present in the NCBI taxonomy database. Because
+MTSv stores TaxIDs as unsigned 32-bit integers, the v1 encoding is `1 + nine
+assembly digits` for GCF and the same with a leading `2` for GCA. For example,
+`GCF_000005845.2` becomes `1000005845`. The assembly version remains explicit
+in the manifest and does not change the code by itself. NCBI-aware
 name, lineage, LCA, or genus-level operations must therefore consult the GTDB
 lineage stored in the manifest (or a future generated GTDB taxonomy tree)
 instead of sending these IDs to an NCBI taxonomy resolver.
+
+`reference/metatracer_reference.taxonomy.tsv` has one row per requested
+assembly, including assemblies excluded by the selected policy. It records the
+final code, source namespace, original NCBI TaxID and rank, resolved NCBI species
+TaxID, GTDB representative and code, `filtered`, and `decision_reason`.
 
 When `max_accessions` is set, the kept metadata, taxonomy, accession list, and
 annotation percentages all describe that truncated selection. The accession

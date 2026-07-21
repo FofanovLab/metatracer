@@ -29,7 +29,7 @@ Supported:
   - TSV/CSV with columns including assembly_accession and tax_id (names vary; auto-detected)
   - JSON Lines (.jsonl) with common nesting supported
   - MetaTracer supplementary manifests with ncbi_taxid and/or
-    gtdb_species_numeric_id, selected by --taxonomy-source
+    gtdb_representative_code, selected by --taxonomy-source
 
 Outputs
 -------
@@ -62,7 +62,7 @@ Dependencies
 ------------
 - biopython
 - pysam (required ONLY if --index-gff is used)
-- ete3 (required for taxid rollup to species-or-higher)
+- ete3 (required to resolve NCBI TaxIDs strictly to a species ancestor)
 """
 
 from __future__ import annotations
@@ -109,17 +109,6 @@ REPORT_COL_CANDIDATES = {
     "assembly": ["assembly_accession", "assemblyAccession", "assembly_accession_version", "ncbi_accession", "accession"],
     "taxid": ["tax_id", "taxid", "taxId", "organism_tax_id", "organism_taxid"],
 }
-
-ROLLUP_RANK_ORDER = [
-    "species",
-    "genus",
-    "family",
-    "order",
-    "class",
-    "phylum",
-    "superkingdom",
-]
-
 
 def normalize_assembly_accession(value: str) -> str:
     return str(value).strip().upper()
@@ -309,15 +298,16 @@ def read_assembly_taxid_report(report_path: Path) -> Dict[str, int]:
 
 def read_assembly_taxonomy_report(
     report_path: Path, taxonomy_source: str
-) -> Tuple[Dict[str, int], Dict[str, str]]:
-    """Read IDs plus provenance, with special handling for MetaTracer manifests."""
+) -> Tuple[Dict[str, int], Dict[str, int], Dict[str, dict]]:
+    """Read raw NCBI IDs, GTDB representative codes, and assembly metadata."""
     name = report_path.name.lower()
     is_delimited = any(
         name.endswith(suffix) for suffix in (".tsv", ".tsv.gz", ".csv", ".csv.gz")
     )
     if not is_delimited:
         mapping = read_assembly_taxid_report(report_path)
-        return mapping, {assembly: "ncbi" for assembly in mapping}
+        details = {assembly: {"ncbi_accession": assembly} for assembly in mapping}
+        return mapping, {}, details
 
     delimiter = _sniff_tsv_delim(report_path)
     opener = gzip.open if report_path.suffix == ".gz" else open
@@ -325,33 +315,40 @@ def read_assembly_taxonomy_report(
         reader = csv.DictReader(handle, delimiter=delimiter)
         fields = set(reader.fieldnames or [])
         is_manifest = "ncbi_accession" in fields and (
-            "ncbi_taxid" in fields or "gtdb_species_numeric_id" in fields
+            "ncbi_taxid" in fields or "gtdb_representative_code" in fields
         )
         if not is_manifest:
             mapping = read_assembly_taxid_report(report_path)
-            return mapping, {assembly: "ncbi" for assembly in mapping}
+            details = {assembly: {"ncbi_accession": assembly} for assembly in mapping}
+            return mapping, {}, details
 
-        mapping: Dict[str, int] = {}
-        sources: Dict[str, str] = {}
+        ncbi_mapping: Dict[str, int] = {}
+        gtdb_mapping: Dict[str, int] = {}
+        details: Dict[str, dict] = {}
         for row in reader:
             assembly = normalize_assembly_accession(row.get("ncbi_accession", ""))
             ncbi = str(row.get("ncbi_taxid", "")).strip()
-            gtdb = str(row.get("gtdb_species_numeric_id", "")).strip()
-            if taxonomy_source == "ncbi":
-                selected, source = ncbi, "ncbi"
-            elif taxonomy_source == "gtdb":
-                selected, source = gtdb, "gtdb"
-            elif ncbi.isdigit():
-                selected, source = ncbi, "ncbi"
-            else:
-                selected, source = gtdb, "gtdb"
-            if assembly and selected.isdigit() and int(selected) > 0:
-                mapping[assembly] = int(selected)
-                sources[assembly] = source
-        return mapping, sources
+            gtdb = str(row.get("gtdb_representative_code", "")).strip()
+            if not assembly:
+                continue
+            details[assembly] = {
+                "ncbi_accession": assembly,
+                "original_ncbi_taxid": ncbi,
+                "original_ncbi_taxid_rank": str(row.get("ncbi_taxid_rank", "")).strip(),
+                "gtdb_species_id": str(row.get("gtdb_species_id", "")).strip(),
+                "gtdb_representative_accession": str(
+                    row.get("gtdb_species_cluster_id", "")
+                ).strip(),
+                "gtdb_representative_code": gtdb,
+            }
+            if ncbi.isdigit() and int(ncbi) > 0:
+                ncbi_mapping[assembly] = int(ncbi)
+            if gtdb.isdigit() and int(gtdb) > 0:
+                gtdb_mapping[assembly] = int(gtdb)
+        return ncbi_mapping, gtdb_mapping, details
 
 
-def build_species_or_higher_rollup(
+def resolve_ncbi_species_taxids(
     taxids: Iterable[int],
 ) -> Tuple[Dict[int, int], Dict[int, str]]:
     unique_taxids = sorted({int(t) for t in taxids if t is not None})
@@ -361,7 +358,7 @@ def build_species_or_higher_rollup(
         from ete3 import NCBITaxa
     except Exception as e:
         raise SystemExit(
-            "ete3 is required for taxid rollup. Install with: pip install ete3"
+            "ete3 is required for NCBI species resolution. Install with: pip install ete3"
         ) from e
 
     ncbi = NCBITaxa()
@@ -378,29 +375,20 @@ def build_species_or_higher_rollup(
 
     rank_by_taxid = ncbi.get_rank(list(lineage_taxids)) if lineage_taxids else {}
 
-    rollup_taxid_by_taxid: Dict[int, int] = {}
-    rollup_rank_by_taxid: Dict[int, str] = {}
+    species_taxid_by_taxid: Dict[int, int] = {}
+    original_rank_by_taxid: Dict[int, str] = {}
     for taxid in unique_taxids:
         lineage = lineages[taxid]
-        best_by_rank: Dict[str, int] = {}
-        for lin_taxid in lineage:
-            rank = rank_by_taxid.get(lin_taxid, "")
-            if rank in ROLLUP_RANK_ORDER:
-                best_by_rank[rank] = lin_taxid
+        original_rank_by_taxid[taxid] = rank_by_taxid.get(taxid, "unknown")
+        species = next(
+            (lineage_taxid for lineage_taxid in reversed(lineage)
+             if rank_by_taxid.get(lineage_taxid) == "species"),
+            None,
+        )
+        if species is not None:
+            species_taxid_by_taxid[taxid] = species
 
-        rolled_taxid = taxid
-        rolled_rank = rank_by_taxid.get(taxid, "unknown")
-        for rank in ROLLUP_RANK_ORDER:
-            candidate = best_by_rank.get(rank)
-            if candidate is not None:
-                rolled_taxid = candidate
-                rolled_rank = rank
-                break
-
-        rollup_taxid_by_taxid[taxid] = rolled_taxid
-        rollup_rank_by_taxid[taxid] = rolled_rank
-
-    return rollup_taxid_by_taxid, rollup_rank_by_taxid
+    return species_taxid_by_taxid, original_rank_by_taxid
 
 
 # ----------------------------
@@ -552,6 +540,7 @@ def build_reference(
     max_size_mb: int,
     map_tsv_path: Path,
     summary_path: Path,
+    taxonomy_map_path: Path,
     index_gff: bool,
     force_reindex: bool,
     mapping_only: bool,
@@ -563,34 +552,111 @@ def build_reference(
     if not mapping_only and max_bytes <= 0:
         raise SystemExit("--max-size-mb must be > 0")
 
-    asm_to_taxid, asm_taxid_source = read_assembly_taxonomy_report(
+    raw_ncbi_by_assembly, gtdb_code_by_assembly, taxonomy_details = read_assembly_taxonomy_report(
         report_path, taxonomy_source
     )
+    species_by_ncbi_taxid, rank_by_ncbi_taxid = resolve_ncbi_species_taxids(
+        raw_ncbi_by_assembly.values()
+    )
+    asm_to_taxid: Dict[str, int] = {}
+    asm_taxid_source: Dict[str, str] = {}
+    taxonomy_audit_rows = []
+    for assembly in sorted(
+        set(taxonomy_details) | set(raw_ncbi_by_assembly) | set(gtdb_code_by_assembly)
+    ):
+        raw_ncbi = raw_ncbi_by_assembly.get(assembly)
+        ncbi_species = species_by_ncbi_taxid.get(raw_ncbi) if raw_ncbi else None
+        gtdb_code = gtdb_code_by_assembly.get(assembly)
+        selected = None
+        source = ""
+        reason = ""
+        if taxonomy_source == "gtdb":
+            if gtdb_code is not None:
+                selected, source = gtdb_code, "gtdb_representative_accession"
+            else:
+                reason = "missing_or_unencodable_gtdb_representative"
+        elif taxonomy_source == "ncbi":
+            if ncbi_species is not None:
+                selected, source = ncbi_species, "ncbi_species_taxid"
+            elif raw_ncbi is None:
+                reason = "missing_ncbi_taxid"
+            else:
+                reason = "ncbi_taxid_has_no_species_ancestor"
+        elif ncbi_species is not None:
+            selected, source = ncbi_species, "ncbi_species_taxid"
+        elif gtdb_code is not None:
+            selected, source = gtdb_code, "gtdb_representative_accession"
+            reason = (
+                "fallback_missing_ncbi_taxid" if raw_ncbi is None
+                else "fallback_ncbi_taxid_has_no_species_ancestor"
+            )
+        else:
+            reason = (
+                "missing_ncbi_taxid_and_gtdb_representative"
+                if raw_ncbi is None else
+                "ncbi_taxid_has_no_species_ancestor_and_missing_gtdb_representative"
+            )
+        if selected is not None:
+            asm_to_taxid[assembly] = selected
+            asm_taxid_source[assembly] = source
+        details = taxonomy_details.get(assembly, {})
+        taxonomy_audit_rows.append({
+            "ncbi_accession": assembly,
+            "coded_taxonomy_id": selected if selected is not None else "",
+            "taxonomy_id_source": source,
+            "original_ncbi_taxid": raw_ncbi if raw_ncbi is not None else "",
+            "original_ncbi_taxid_rank": rank_by_ncbi_taxid.get(
+                raw_ncbi, details.get("original_ncbi_taxid_rank", "")
+            ) if raw_ncbi is not None else "",
+            "ncbi_species_taxid": ncbi_species if ncbi_species is not None else "",
+            "gtdb_species_id": details.get("gtdb_species_id", ""),
+            "gtdb_representative_accession": details.get(
+                "gtdb_representative_accession", ""
+            ),
+            "gtdb_representative_code": gtdb_code if gtdb_code is not None else "",
+            "filtered": selected is None,
+            "reference_included": False,
+            "decision_reason": reason,
+        })
+
+    id_namespaces: Dict[int, set] = {}
+    for assembly, taxonomy_id in asm_to_taxid.items():
+        id_namespaces.setdefault(taxonomy_id, set()).add(asm_taxid_source[assembly])
+    namespace_collisions = {
+        taxonomy_id: sources for taxonomy_id, sources in id_namespaces.items()
+        if len(sources) > 1
+    }
+    if namespace_collisions:
+        taxonomy_id, sources = next(iter(namespace_collisions.items()))
+        raise RuntimeError(
+            "Taxonomy ID {} collides across namespaces: {}".format(
+                taxonomy_id, ", ".join(sorted(sources))
+            )
+        )
+
+    taxonomy_map_path.parent.mkdir(parents=True, exist_ok=True)
+    taxonomy_fields = [
+        "ncbi_accession", "coded_taxonomy_id", "taxonomy_id_source",
+        "original_ncbi_taxid", "original_ncbi_taxid_rank", "ncbi_species_taxid",
+        "gtdb_species_id", "gtdb_representative_accession",
+        "gtdb_representative_code", "filtered", "reference_included",
+        "decision_reason",
+    ]
+    with taxonomy_map_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=taxonomy_fields, delimiter="\t")
+        writer.writeheader()
+        writer.writerows(taxonomy_audit_rows)
     if not asm_to_taxid:
         raise SystemExit(
-            f"No assembly->taxid mappings found in report: {report_path}")
+            f"No assemblies passed the {taxonomy_source} taxonomy policy; see {taxonomy_map_path}")
 
     logging.info(f"Report mappings loaded: {len(asm_to_taxid):,} assemblies")
-    ncbi_taxids = [
-        taxid for assembly, taxid in asm_to_taxid.items()
-        if asm_taxid_source.get(assembly) == "ncbi"
-    ]
-    rollup_by_taxid, rollup_rank_by_taxid = build_species_or_higher_rollup(ncbi_taxids)
-    asm_to_taxid = {
-        asm: rollup_by_taxid.get(taxid, taxid) for asm, taxid in asm_to_taxid.items()
-    }
     rolled_rank_by_taxid: Dict[int, str] = {}
-    for original_taxid, rolled_taxid in rollup_by_taxid.items():
-        rolled_rank_by_taxid.setdefault(
-            rolled_taxid, rollup_rank_by_taxid.get(original_taxid, "unknown")
-        )
     for assembly, taxid in asm_to_taxid.items():
-        if asm_taxid_source.get(assembly) == "gtdb":
-            rolled_rank_by_taxid[taxid] = "species"
+        rolled_rank_by_taxid[taxid] = "species"
     logging.info(
-        "Rolled up %d unique taxids to species-or-higher (%d unique after rollup)",
-        len(rollup_by_taxid),
-        len(set(asm_to_taxid.values())),
+        "Taxonomy policy retained %d and filtered %d assemblies",
+        len(asm_to_taxid), len(taxonomy_audit_rows) - len(asm_to_taxid),
     )
     full_to_dir, base_to_dirs = build_assembly_dir_index(data_dir)
 
@@ -606,6 +672,8 @@ def build_reference(
     ]
 
     assemblies_processed = 0
+    processed_assemblies = set()
+    reference_skip_reason: Dict[str, str] = {}
     taxa_seen = set()
     assemblies_per_taxid = Counter()
 
@@ -633,17 +701,20 @@ def build_reference(
                     assembly, full_to_dir, base_to_dirs
                 )
                 if assembly_dir_name is None:
+                    reference_skip_reason[assembly] = "assembly_directory_not_found"
                     logging.warning(
                         f"[skip] Assembly dir not found under --data-dir for report accession: {assembly}")
                     continue
                 assembly_dir = data_dir / assembly_dir_name
                 if not assembly_dir.exists():
+                    reference_skip_reason[assembly] = "assembly_directory_not_found"
                     logging.warning(
                         f"[skip] Assembly dir not found under --data-dir: {assembly_dir}")
                     continue
 
                 genomic_fna, gff, protein = locate_assembly_files(assembly_dir)
                 if genomic_fna is None:
+                    reference_skip_reason[assembly] = "genome_fasta_not_found"
                     logging.warning(
                         f"[skip] No *genomic.fna found under: {assembly_dir}")
                     continue
@@ -709,7 +780,10 @@ def build_reference(
 
                 if found_any_contig:
                     assemblies_processed += 1
+                    processed_assemblies.add(assembly)
                     assemblies_per_taxid[taxid] += 1
+                else:
+                    reference_skip_reason[assembly] = "genome_fasta_has_no_sequences"
 
         finally:
             try:
@@ -717,6 +791,20 @@ def build_reference(
                     fasta_out.close()
             except Exception:
                 pass
+
+    for row in taxonomy_audit_rows:
+        assembly = row["ncbi_accession"]
+        if assembly in processed_assemblies:
+            row["reference_included"] = True
+        elif not row["filtered"]:
+            row["filtered"] = True
+            row["decision_reason"] = reference_skip_reason.get(
+                assembly, "reference_sequence_not_included"
+            )
+    with taxonomy_map_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=taxonomy_fields, delimiter="\t")
+        writer.writeheader()
+        writer.writerows(taxonomy_audit_rows)
 
     # Summary
     with open(summary_path, "wt", encoding="utf-8") as s:
@@ -729,7 +817,11 @@ def build_reference(
         s.write(f"Unique taxa:          {len(taxa_seen):,}\n")
         s.write(f"Total sequences:      {accession_key - 1:,}\n")
         s.write(f"Taxonomy ID policy:   {taxonomy_source}\n")
-        source_counts = Counter(asm_taxid_source.get(assembly, "unknown") for assembly in asm_to_taxid)
+        s.write(f"Assemblies filtered from reference: "
+                f"{sum(bool(row['filtered']) for row in taxonomy_audit_rows):,}\n")
+        source_counts = Counter(
+            asm_taxid_source.get(assembly, "unknown") for assembly in processed_assemblies
+        )
         for source, count in sorted(source_counts.items()):
             s.write(f"Assemblies using {source.upper()} IDs: {count:,}\n")
         s.write(
@@ -737,7 +829,7 @@ def build_reference(
         s.write(f"Chunks written:       {chunks_written:,}\n")
         s.write(f"GFF indexing enabled: {index_gff}\n\n")
 
-        s.write("Assemblies per taxid (rolled to species-or-higher):\n")
+        s.write("Assemblies per species-level taxonomy ID:\n")
         s.write("  taxid\trank\tassemblies\n")
         for taxid, cnt in assemblies_per_taxid.most_common():
             s.write(
@@ -745,6 +837,7 @@ def build_reference(
             )
 
     logging.info(f"Wrote mapping TSV: {map_tsv_path}")
+    logging.info(f"Wrote taxonomy audit TSV: {taxonomy_map_path}")
     logging.info(f"Wrote summary:     {summary_path}")
     if mapping_only:
         logging.info("Skipped FASTA chunk generation (--mapping-only enabled)")
@@ -775,6 +868,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="Output mapping TSV (default: <out-dir>/metatracer_reference.map.tsv).")
     ap.add_argument("--summary-out", default=None,
                     help="Output summary (default: <out-dir>/metatracer_reference.summary.txt).")
+    ap.add_argument(
+        "--taxonomy-map-out", default=None,
+        help="Assembly taxonomy decision TSV (default: <out-dir>/metatracer_reference.taxonomy.tsv).",
+    )
     ap.add_argument("--index-gff", action="store_true",
                     help="bgzip+tabix index GFFs as they are discovered.")
     ap.add_argument("--force-reindex", action="store_true",
@@ -798,6 +895,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         out_dir / "metatracer_reference.map.tsv")
     summary_out = Path(args.summary_out) if args.summary_out else (
         out_dir / "metatracer_reference.summary.txt")
+    taxonomy_map_out = Path(args.taxonomy_map_out) if args.taxonomy_map_out else (
+        out_dir / "metatracer_reference.taxonomy.tsv")
 
     build_reference(
         data_dir=data_dir,
@@ -806,6 +905,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         max_size_mb=args.max_size_mb,
         map_tsv_path=map_out,
         summary_path=summary_out,
+        taxonomy_map_path=taxonomy_map_out,
         index_gff=args.index_gff,
         force_reindex=args.force_reindex,
         mapping_only=args.mapping_only,

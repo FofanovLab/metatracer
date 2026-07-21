@@ -54,8 +54,8 @@ rehydrate_max_workers: 10
 
 # Reference FASTA chunks and MTSv FM-index construction.
 reference_chunk_size_mb: 1000
-# ncbi, gtdb, or ncbi_then_gtdb. The fallback policy uses a synthetic GTDB
-# species-cluster integer only when an NCBI TaxID is unavailable.
+# ncbi, gtdb, or ncbi_then_gtdb. NCBI mode requires a species ancestor. GTDB
+# mode uses the reversible integer encoding of the representative accession.
 reference_taxonomy_source: ncbi_then_gtdb
 bwt_occ_sample_rate: 64
 sa_sample_rate: 32

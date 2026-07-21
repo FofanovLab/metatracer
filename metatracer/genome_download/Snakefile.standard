@@ -29,6 +29,7 @@ rule all:
         f"{OUT}/ncbi_datasets_file_inventory.tsv",
         f"{OUT}/genome_manifest.tsv",
         f"{BUILD}/metatracer_reference.map.tsv",
+        f"{BUILD}/metatracer_reference.taxonomy.tsv",
         built_indices,
         f"{OUT}/report/summary.tsv",
         f"{OUT}/report/index.html",
@@ -215,6 +216,7 @@ checkpoint build_reference_chunks:
     output:
         chunks=directory(f"{BUILD}/chunks"),
         mapping=f"{BUILD}/metatracer_reference.map.tsv",
+        taxonomy=f"{BUILD}/metatracer_reference.taxonomy.tsv",
         summary=f"{BUILD}/metatracer_reference.summary.txt",
     params:
         data=f"{DATASET_DIR}/ncbi_dataset/data",
@@ -231,6 +233,7 @@ checkpoint build_reference_chunks:
         python {params.script:q} --data-dir {params.data:q} --report {params.report:q} \
           --out-dir {output.chunks:q} --max-size-mb {params.max_mb:q} \
           --map-out {output.mapping:q} --summary-out {output.summary:q} \
+          --taxonomy-map-out {output.taxonomy:q} \
           --taxonomy-source {params.taxonomy_source:q} --log {log:q}
         """
 

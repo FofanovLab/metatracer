@@ -1,8 +1,8 @@
 """Create an auditable GTDB/NCBI manifest for every requested genome."""
 
 import json
-import hashlib
 import logging
+import re
 from pathlib import Path
 from typing import Dict
 
@@ -39,8 +39,9 @@ NCBI_RANK_ORDER = [
     "superkingdom", "kingdom", "phylum", "class", "order", "family",
     "genus", "species", "subspecies", "strain", "isolate",
 ]
-SYNTHETIC_GTDB_MIN = 1_000_000_000
-SYNTHETIC_GTDB_MAX = 1_999_999_999
+GTDB_REPRESENTATIVE_RE = re.compile(
+    r"^(?:RS_|GB_)?(GCF|GCA)_(\d{9})\.(\d+)$", re.IGNORECASE
+)
 
 
 def text(value) -> str:
@@ -71,22 +72,13 @@ def report_row(record: dict) -> dict:
     }
 
 
-def assign_gtdb_numeric_ids(cluster_ids, reserved_ids):
-    """Assign stable, manifest-local positive integers to GTDB species clusters."""
-    assigned = {}
-    used = {int(value) for value in reserved_ids if str(value).isdigit()}
-    width = SYNTHETIC_GTDB_MAX - SYNTHETIC_GTDB_MIN + 1
-    for cluster_id in sorted({str(value).strip() for value in cluster_ids if str(value).strip()}):
-        digest = hashlib.sha256(cluster_id.encode("utf-8")).digest()
-        candidate = SYNTHETIC_GTDB_MIN + (int.from_bytes(digest[:8], "big") % width)
-        start = candidate
-        while candidate in used:
-            candidate = SYNTHETIC_GTDB_MIN + ((candidate - SYNTHETIC_GTDB_MIN + 1) % width)
-            if candidate == start:
-                raise RuntimeError("Exhausted the synthetic GTDB taxonomy-ID namespace")
-        assigned[cluster_id] = candidate
-        used.add(candidate)
-    return assigned
+def encode_gtdb_representative(accession):
+    """Encode GCF/GCA plus the nine-digit assembly number within MTSv's u32."""
+    match = GTDB_REPRESENTATIVE_RE.fullmatch(str(accession).strip())
+    if not match:
+        return ""
+    prefix = "1" if match.group(1).upper() == "GCF" else "2"
+    return "{}{}".format(prefix, match.group(2))
 
 
 def ncbi_taxid_ranks(taxids):
@@ -171,20 +163,24 @@ if "gtdb_metadata_ncbi_taxid" in manifest.columns:
     ).fillna(manifest["gtdb_metadata_ncbi_taxid"]).fillna("")
 
 # A GTDB species cluster is anchored by its representative genome accession.
-# The synthetic integer is for tools such as MTSv and is not an NCBI TaxID.
+# The numeric code is a reversible MetaTracer encoding, not an NCBI TaxID.
 manifest["gtdb_species_id"] = column_or_blank(manifest, "species").str.strip()
 manifest["gtdb_species_cluster_id"] = column_or_blank(
     manifest, "gtdb_genome_representative"
 ).str.replace(r"^(RS_|GB_)", "", regex=True).str.strip()
-gtdb_id_map = assign_gtdb_numeric_ids(
-    manifest["gtdb_species_cluster_id"], manifest["ncbi_taxid"]
+manifest["gtdb_representative_code"] = manifest["gtdb_species_cluster_id"].map(
+    encode_gtdb_representative
 )
-manifest["gtdb_species_numeric_id"] = manifest["gtdb_species_cluster_id"].map(
-    lambda cluster_id: str(gtdb_id_map.get(cluster_id, ""))
-)
-manifest["gtdb_species_numeric_id_scheme"] = manifest[
-    "gtdb_species_numeric_id"
-].map(lambda value: "metatracer_gtdb_sha256_v1" if value else "")
+manifest["gtdb_representative_code_scheme"] = manifest[
+    "gtdb_representative_code"
+].map(lambda value: "metatracer_gtdb_rep_v1" if value else "")
+ncbi_ids = {int(value) for value in manifest["ncbi_taxid"] if str(value).isdigit()}
+gtdb_codes = {int(value) for value in manifest["gtdb_representative_code"] if value}
+collision = ncbi_ids & gtdb_codes
+if collision:
+    raise RuntimeError("GTDB representative code collides with NCBI TaxID: {}".format(
+        sorted(collision)[0]
+    ))
 
 rank_by_taxid = ncbi_taxid_ranks(manifest["ncbi_taxid"])
 manifest["ncbi_taxid_rank"] = manifest["ncbi_taxid"].map(rank_by_taxid).fillna("")
@@ -194,8 +190,8 @@ leading = [
     "ncbi_paired_accession", "ncbi_source_database", "ncbi_taxid",
     "ncbi_taxid_rank", "ncbi_organism_name", "gtdb_metadata_set",
     "gtdb_taxonomy", "species", "gtdb_species_id",
-    "gtdb_species_cluster_id", "gtdb_species_numeric_id",
-    "gtdb_species_numeric_id_scheme",
+    "gtdb_species_cluster_id", "gtdb_representative_code",
+    "gtdb_representative_code_scheme",
     "gtdb_genome_representative", "genome_source_category",
     "genome_fasta_present", "gff3_present", "protein_fasta_present",
     "genome_fasta_path", "gff3_path", "protein_fasta_path",
