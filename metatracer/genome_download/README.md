@@ -7,7 +7,8 @@ This directory intentionally maintains two entry-point Snakefiles:
   data; builds the MetaTracer FASTA chunks and MTSv indices; and produces a
   compact HTML build report.
 - `Snakefile` is the publication/debug workflow. It retains detailed metadata,
-  annotation inventories, supplementary tables, and one-time audit summaries.
+  annotation inventories, supplementary tables, one-time audit summaries, and
+  benchmarked reference/index construction.
 
 Each has its own config file and output directories, so the workflows can be
 run in the same checkout without overwriting each other's products.
@@ -216,6 +217,17 @@ All final tables are written under `results/` by default:
 - `summary_by_gtdb_phylum.tsv`
 - `summary_by_gtdb_rank.tsv`: phylum, class, and genus counts in one table.
 - `summary_by_accession_prefix.tsv`: RefSeq (`GCF`) versus GenBank (`GCA`).
+- `reference/metatracer_reference.map.tsv` and
+  `reference/metatracer_reference.summary.txt`: the built sequence mapping and
+  reference-build summary.
+- `reference/chunks/` and `reference/indices/`: reference FASTA chunks and one
+  MTSv FM-index per chunk.
+
+Reference and index timing/resource measurements are written under
+`benchmarks/` by default. `build_reference.tsv` measures the complete reference
+chunking step; `build_mtsv_index_<chunk>.tsv` measures each index independently.
+Snakemake benchmark tables include elapsed wall time, CPU time, maximum resident
+memory, I/O, and average load where supported by the execution platform.
 
 When `max_accessions` is set, the kept metadata, taxonomy, accession list, and
 annotation percentages all describe that truncated selection. The accession

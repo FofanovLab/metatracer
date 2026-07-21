@@ -5,6 +5,8 @@ configfile: "config.yaml"
 OUT = config.get("output_dir", "results").rstrip("/")
 RES = config.get("resource_dir", "resources").rstrip("/")
 LOG = config.get("log_dir", "logs").rstrip("/")
+BENCH = config.get("benchmark_dir", "benchmarks").rstrip("/")
+BUILD = f"{OUT}/reference"
 DATASET_DIR = f"{RES}/ncbi_dataset"
 DATASET_ZIP = f"{RES}/ncbi_dataset.zip"
 
@@ -21,6 +23,17 @@ if not requested_domains or unknown_domains:
     )
 metadata_prefixes = [DOMAIN_PREFIX[domain] for domain in requested_domains]
 metadata_tables = expand(f"{RES}/{{prefix}}_metadata.tsv", prefix=metadata_prefixes)
+
+
+def built_indices(wildcards):
+    checkpoint_output = checkpoints.build_reference_chunks.get(**wildcards).output.chunks
+    chunks = sorted(glob_wildcards(
+        str(checkpoint_output) + "/metatracer_reference.chunk.{chunk}.fasta"
+    ).chunk)
+    return expand(
+        f"{BUILD}/indices/metatracer_reference.chunk.{{chunk}}.index",
+        chunk=chunks,
+    )
 
 FINAL_OUTPUTS = [
     f"{OUT}/gtdb_representatives.tsv",
@@ -41,7 +54,10 @@ FINAL_OUTPUTS = [
 
 rule all:
     input:
-        FINAL_OUTPUTS
+        FINAL_OUTPUTS,
+        f"{BUILD}/metatracer_reference.map.tsv",
+        f"{BUILD}/metatracer_reference.summary.txt",
+        built_indices,
 
 
 rule download_gtdb_metadata:
@@ -158,6 +174,55 @@ rule inventory_ncbi_dataset:
         f"{LOG}/inventory_ncbi_dataset.log"
     script:
         "scripts/inventory_ncbi_dataset.py"
+
+
+checkpoint build_reference_chunks:
+    input:
+        dataset=DATASET_DIR,
+        status=f"{RES}/ncbi_dataset.rehydrate.status.json",
+    output:
+        chunks=directory(f"{BUILD}/chunks"),
+        mapping=f"{BUILD}/metatracer_reference.map.tsv",
+        summary=f"{BUILD}/metatracer_reference.summary.txt",
+    params:
+        data=f"{DATASET_DIR}/ncbi_dataset/data",
+        report=f"{DATASET_DIR}/ncbi_dataset/data/assembly_data_report.jsonl",
+        max_mb=config.get("reference_chunk_size_mb", 1000),
+        script=workflow.source_path("../reference_build.py"),
+    conda:
+        "envs/reference_build.yaml"
+    log:
+        f"{LOG}/build_reference.log"
+    benchmark:
+        f"{BENCH}/build_reference.tsv"
+    shell:
+        """
+        python {params.script:q} --data-dir {params.data:q} --report {params.report:q} \
+          --out-dir {output.chunks:q} --max-size-mb {params.max_mb:q} \
+          --map-out {output.mapping:q} --summary-out {output.summary:q} --log {log:q}
+        """
+
+
+rule build_mtsv_index:
+    input:
+        f"{BUILD}/chunks/metatracer_reference.chunk.{{chunk}}.fasta"
+    output:
+        f"{BUILD}/indices/metatracer_reference.chunk.{{chunk}}.index"
+    params:
+        occ=config.get("bwt_occ_sample_rate", 64),
+        sa=config.get("sa_sample_rate", 32),
+    conda:
+        "envs/mtsv_index.yaml"
+    log:
+        f"{LOG}/build_mtsv_index_{{chunk}}.log"
+    benchmark:
+        f"{BENCH}/build_mtsv_index_{{chunk}}.tsv"
+    shell:
+        """
+        mkdir -p $(dirname {output:q}) $(dirname {log:q})
+        mtsv-build --fasta {input:q} --index {output:q} \
+          --sample-interval {params.occ:q} --sa-sample {params.sa:q} > {log:q} 2>&1
+        """
 
 
 rule build_supplementary_genome_manifest:

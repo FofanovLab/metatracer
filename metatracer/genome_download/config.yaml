@@ -10,6 +10,7 @@ gtdb_metadata_urls:
 output_dir: "results"
 resource_dir: "resources"
 log_dir: "logs"
+benchmark_dir: "benchmarks"
 
 # All filters are combined with AND. Set an option to null to disable it.
 # Exact-value lists are case-insensitive.
@@ -50,3 +51,8 @@ datasets_include: "genome,gff3,protein"
 datasets_download_attempts: 5
 datasets_retry_delay_seconds: 30
 rehydrate_max_workers: 10
+
+# Reference FASTA chunks and MTSv FM-index construction.
+reference_chunk_size_mb: 1000
+bwt_occ_sample_rate: 64
+sa_sample_rate: 32

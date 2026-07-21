@@ -202,7 +202,7 @@ checkpoint build_reference_chunks:
         data=f"{DATASET_DIR}/ncbi_dataset/data",
         report=f"{DATASET_DIR}/ncbi_dataset/data/assembly_data_report.jsonl",
         max_mb=config.get("reference_chunk_size_mb", 1000),
-        script="../reference_build.py",
+        script=workflow.source_path("../reference_build.py"),
     conda:
         "envs/reference_build.yaml"
     log:
