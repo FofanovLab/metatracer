@@ -225,6 +225,8 @@ rule build_mtsv_index:
         f"{BENCH}/build_mtsv_index_{{chunk}}.tsv"
     shell:
         """
+        export PATH=$HOME/.local/bin:$PATH
+        export PATH=$HOME/mtsv_gene/mtsv_tools/target/release:$PATH
         mkdir -p $(dirname {output:q}) $(dirname {log:q})
         mtsv-build --fasta {input:q} --index {output:q} \
           --sample-interval {params.occ:q} --sa-sample {params.sa:q} > {log:q} 2>&1
