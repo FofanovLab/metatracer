@@ -1,281 +1,133 @@
-"""GTDB representative annotation-availability workflow."""
+"""Download and rehydrate NCBI genome assemblies from an accession list."""
 
 configfile: "config.yaml"
 
-OUT = config.get("output_dir", "results").rstrip("/")
-RES = config.get("resource_dir", "resources").rstrip("/")
-LOG = config.get("log_dir", "logs").rstrip("/")
-BENCH = config.get("benchmark_dir", "benchmarks").rstrip("/")
-BUILD = f"{OUT}/reference"
-DATASET_DIR = f"{RES}/ncbi_dataset"
-DATASET_ZIP = f"{RES}/ncbi_dataset.zip"
-
-DOMAIN_PREFIX = {"bacteria": "bac120", "archaea": "ar53"}
-requested_domains = config.get("gtdb_domains", ["bacteria"])
-if isinstance(requested_domains, str):
-    requested_domains = [requested_domains]
-requested_domains = [str(domain).lower() for domain in requested_domains]
-unknown_domains = sorted(set(requested_domains) - set(DOMAIN_PREFIX))
-if not requested_domains or unknown_domains:
-    raise ValueError(
-        "gtdb_domains must contain bacteria, archaea, or both; invalid values: "
-        + ", ".join(unknown_domains)
-    )
-metadata_prefixes = [DOMAIN_PREFIX[domain] for domain in requested_domains]
-metadata_tables = expand(f"{RES}/{{prefix}}_metadata.tsv", prefix=metadata_prefixes)
-
-
-def built_indices(wildcards):
-    checkpoint_output = checkpoints.build_reference_chunks.get(**wildcards).output.chunks
-    chunks = sorted(glob_wildcards(
-        str(checkpoint_output) + "/metatracer_reference.chunk.{chunk}.fasta"
-    ).chunk)
-    return expand(
-        f"{BUILD}/indices/metatracer_reference.chunk.{{chunk}}.index",
-        chunk=chunks,
-    )
-
-FINAL_OUTPUTS = [
-    f"{OUT}/gtdb_representatives.tsv",
-    f"{OUT}/gtdb_kept_accessions_metadata.tsv",
-    f"{OUT}/gtdb_representative_accessions.txt",
-    f"{OUT}/gtdb_representative_taxonomy.tsv",
-    f"{OUT}/gtdb_accession_filter_summary.tsv",
-    f"{OUT}/ncbi_datasets_file_inventory.tsv",
-    f"{OUT}/supplementary_genome_manifest.tsv",
-    f"{OUT}/gtdb_representatives_with_ncbi_annotation_status.tsv",
-    f"{OUT}/summary_annotation_status.tsv",
-    f"{OUT}/summary_by_genome_category.tsv",
-    f"{OUT}/summary_by_gtdb_phylum.tsv",
-    f"{OUT}/summary_by_gtdb_rank.tsv",
-    f"{OUT}/summary_by_accession_prefix.tsv",
-]
+ACCESSIONS = config["accession_file"]
+OUT = config.get("output_dir", "downloads").rstrip("/")
+ARCHIVE = f"{OUT}/ncbi_dataset.zip"
+DATASET = f"{OUT}/package"
+ACCESSION_TAXIDS = f"{OUT}/accession_taxid.tsv"
+LOGS = f"{OUT}/logs"
 
 
 rule all:
     input:
-        FINAL_OUTPUTS,
-        f"{BUILD}/metatracer_reference.map.tsv",
-        f"{BUILD}/metatracer_reference.taxonomy.tsv",
-        f"{BUILD}/metatracer_reference.summary.txt",
-        built_indices,
+        DATASET,
+        ACCESSION_TAXIDS,
 
 
-rule download_gtdb_metadata:
+rule download_dehydrated:
+    input:
+        accessions=ACCESSIONS,
     output:
-        f"{RES}/{{prefix}}_metadata.tsv.gz"
+        archive=ARCHIVE,
     params:
-        url=lambda wildcards: config["gtdb_metadata_urls"][wildcards.prefix]
-    wildcard_constraints:
-        prefix="bac120|ar53"
+        include=config.get("include", "genome"),
+    conda:
+        "envs/ncbi_datasets.yaml"
     log:
-        f"{LOG}/download_gtdb_metadata_{{prefix}}.log"
+        f"{LOGS}/download.log"
     shell:
         """
-        mkdir -p $(dirname {output:q}) $(dirname {log:q})
-        curl -L --fail --retry 4 --retry-delay 10 {params.url:q} -o {output:q} \
+        mkdir -p {OUT:q} {LOGS:q}
+        datasets download genome accession \
+          --inputfile {input.accessions:q} \
+          --include {params.include:q} \
+          --dehydrated \
+          --filename {output.archive:q} \
+          --no-progressbar \
           > {log:q} 2>&1
         """
 
 
-rule decompress_gtdb_metadata:
+rule accession_species_taxids:
     input:
-        f"{RES}/{{prefix}}_metadata.tsv.gz"
+        archive=ARCHIVE,
     output:
-        f"{RES}/{{prefix}}_metadata.tsv"
-    wildcard_constraints:
-        prefix="bac120|ar53"
-    log:
-        f"{LOG}/decompress_gtdb_metadata_{{prefix}}.log"
-    shell:
-        """
-        gzip -cd {input:q} > {output:q} 2> {log:q}
-        """
-
-
-rule parse_gtdb_metadata:
-    input:
-        metadata_tables
-    output:
-        representatives=f"{OUT}/gtdb_representatives.tsv",
-        kept=f"{OUT}/gtdb_kept_accessions_metadata.tsv",
-        accessions=f"{OUT}/gtdb_representative_accessions.txt",
-        taxonomy=f"{OUT}/gtdb_representative_taxonomy.tsv",
-        summary=f"{OUT}/gtdb_accession_filter_summary.tsv",
-    params:
-        filters=config.get("accession_filters", {}),
-        max_accessions=config.get("max_accessions"),
-    conda:
-        "envs/python.yaml"
-    log:
-        f"{LOG}/parse_gtdb_metadata.log"
-    script:
-        "scripts/parse_gtdb_metadata.py"
-
-
-rule download_ncbi_dataset:
-    input:
-        f"{OUT}/gtdb_representative_accessions.txt"
-    output:
-        archive=DATASET_ZIP,
-        status=f"{RES}/ncbi_dataset.status.json",
-    params:
-        include=config.get("datasets_include", "genome,gff3,protein"),
-        attempts=config.get("datasets_download_attempts", 5),
-        retry_delay=config.get("datasets_retry_delay_seconds", 30),
+        report=ACCESSION_TAXIDS,
     conda:
         "envs/ncbi_datasets.yaml"
     log:
-        f"{LOG}/download_ncbi_dataset.log"
-    script:
-        "scripts/download_ncbi_batch.py"
+        f"{LOGS}/accession_taxids.log"
+    run:
+        import csv
+        import subprocess
+        from pathlib import Path
+
+        from ete3 import NCBITaxa
+
+        Path(output.report).parent.mkdir(parents=True, exist_ok=True)
+        Path(log[0]).parent.mkdir(parents=True, exist_ok=True)
+        command = [
+            "dataformat", "tsv", "genome",
+            "--package", str(input.archive),
+            "--fields", "accession,organism-tax-id",
+            "--elide-header",
+        ]
+        result = subprocess.run(command, text=True, capture_output=True)
+        Path(log[0]).write_text(result.stderr, encoding="utf-8")
+        if result.returncode:
+            raise subprocess.CalledProcessError(result.returncode, command)
+
+        rows = []
+        for row in csv.reader(result.stdout.splitlines(), delimiter="\t"):
+            if len(row) >= 2 and row[0].strip() and row[1].strip():
+                rows.append((row[0].strip().upper(), int(row[1])))
+        if not rows:
+            raise ValueError("NCBI package contains no accession-to-TaxID records")
+
+        ncbi = NCBITaxa()
+        canonical_ranks = (
+            "species", "genus", "family", "order",
+            "class", "phylum", "superkingdom",
+        )
+        rolled = {}
+        for taxid in sorted({taxid for _, taxid in rows}):
+            try:
+                lineage = ncbi.get_lineage(taxid) or [taxid]
+            except Exception:
+                lineage = [taxid]
+            rank_by_taxid = ncbi.get_rank(lineage)
+            taxid_by_rank = {
+                rank_by_taxid.get(lineage_taxid): lineage_taxid
+                for lineage_taxid in lineage
+            }
+            rolled[taxid] = next(
+                (
+                    taxid_by_rank[rank]
+                    for rank in canonical_ranks
+                    if rank in taxid_by_rank
+                ),
+                taxid,
+            )
+
+        with open(output.report, "w", encoding="utf-8", newline="") as handle:
+            writer = csv.writer(handle, delimiter="\t", lineterminator="\n")
+            writer.writerow(["accession", "taxid"])
+            writer.writerows(
+                (accession, rolled[taxid]) for accession, taxid in rows
+            )
 
 
-rule unpack_ncbi_dataset:
+rule extract_and_rehydrate:
     input:
-        archive=DATASET_ZIP,
-        status=f"{RES}/ncbi_dataset.status.json",
+        archive=ARCHIVE,
     output:
-        directory(DATASET_DIR)
-    conda:
-        "envs/python.yaml"
-    log:
-        f"{LOG}/unpack_ncbi_dataset.log"
-    script:
-        "scripts/unpack_ncbi_batch.py"
-
-
-rule rehydrate_ncbi_dataset:
-    input:
-        dataset=DATASET_DIR,
-        package_status=f"{RES}/ncbi_dataset.status.json",
-    output:
-        status=f"{RES}/ncbi_dataset.rehydrate.status.json",
-    params:
-        max_workers=config.get("rehydrate_max_workers", 10)
+        dataset=directory(DATASET),
+    threads:
+        config.get("rehydrate_workers", 8)
     conda:
         "envs/ncbi_datasets.yaml"
     log:
-        f"{LOG}/rehydrate_ncbi_dataset.log"
-    script:
-        "scripts/rehydrate_ncbi_batch.py"
-
-
-rule inventory_ncbi_dataset:
-    input:
-        accessions=f"{OUT}/gtdb_representative_accessions.txt",
-        dataset=DATASET_DIR,
-        package_status=f"{RES}/ncbi_dataset.status.json",
-        rehydrate_status=f"{RES}/ncbi_dataset.rehydrate.status.json",
-    output:
-        f"{OUT}/ncbi_datasets_file_inventory.tsv"
-    conda:
-        "envs/python.yaml"
-    log:
-        f"{LOG}/inventory_ncbi_dataset.log"
-    script:
-        "scripts/inventory_ncbi_dataset.py"
-
-
-checkpoint build_reference_chunks:
-    input:
-        dataset=DATASET_DIR,
-        status=f"{RES}/ncbi_dataset.rehydrate.status.json",
-        manifest=f"{OUT}/supplementary_genome_manifest.tsv",
-    output:
-        chunks=directory(f"{BUILD}/chunks"),
-        mapping=f"{BUILD}/metatracer_reference.map.tsv",
-        taxonomy=f"{BUILD}/metatracer_reference.taxonomy.tsv",
-        summary=f"{BUILD}/metatracer_reference.summary.txt",
-    params:
-        data=f"{DATASET_DIR}/ncbi_dataset/data",
-        report=f"{OUT}/supplementary_genome_manifest.tsv",
-        taxonomy_source=config.get("reference_taxonomy_source", "ncbi_then_gtdb"),
-        max_mb=config.get("reference_chunk_size_mb", 1000),
-        script=workflow.source_path("../reference_build.py"),
-    conda:
-        "envs/reference_build.yaml"
-    log:
-        f"{LOG}/build_reference.log"
-    benchmark:
-        f"{BENCH}/build_reference.tsv"
+        f"{LOGS}/rehydrate.log"
     shell:
         """
-        python {params.script:q} --data-dir {params.data:q} --report {params.report:q} \
-          --out-dir {output.chunks:q} --max-size-mb {params.max_mb:q} \
-          --map-out {output.mapping:q} --summary-out {output.summary:q} \
-          --taxonomy-map-out {output.taxonomy:q} \
-          --taxonomy-source {params.taxonomy_source:q} --log {log:q}
+        mkdir -p {output.dataset:q} {LOGS:q}
+        unzip -q {input.archive:q} -d {output.dataset:q} \
+          > {log:q} 2>&1
+        datasets rehydrate \
+          --directory {output.dataset:q} \
+          --max-workers {threads} \
+          --no-progressbar \
+          >> {log:q} 2>&1
         """
-
-
-rule build_mtsv_index:
-    input:
-        f"{BUILD}/chunks/metatracer_reference.chunk.{{chunk}}.fasta"
-    output:
-        f"{BUILD}/indices/metatracer_reference.chunk.{{chunk}}.index"
-    params:
-        occ=config.get("bwt_occ_sample_rate", 64),
-        sa=config.get("sa_sample_rate", 32),
-    conda:
-        "envs/mtsv_index.yaml"
-    log:
-        f"{LOG}/build_mtsv_index_{{chunk}}.log"
-    benchmark:
-        f"{BENCH}/build_mtsv_index_{{chunk}}.tsv"
-    shell:
-        """
-        export PATH=$HOME/.local/bin:$PATH
-        export PATH=$HOME/mtsv_gene/mtsv_tools/target/release:$PATH
-        mkdir -p $(dirname {output:q}) $(dirname {log:q})
-        mtsv-build --fasta {input:q} --index {output:q} \
-          --sample-interval {params.occ:q} --sa-sample {params.sa:q} > {log:q} 2>&1
-        """
-
-
-rule build_supplementary_genome_manifest:
-    input:
-        metadata=f"{OUT}/gtdb_kept_accessions_metadata.tsv",
-        inventory=f"{OUT}/ncbi_datasets_file_inventory.tsv",
-        dataset=DATASET_DIR,
-        rehydrate_status=f"{RES}/ncbi_dataset.rehydrate.status.json",
-    output:
-        f"{OUT}/supplementary_genome_manifest.tsv"
-    conda:
-        "envs/python.yaml"
-    log:
-        f"{LOG}/build_supplementary_genome_manifest.log"
-    script:
-        "scripts/build_supplementary_genome_manifest.py"
-
-rule join_annotation_status:
-    input:
-        metadata=f"{OUT}/gtdb_kept_accessions_metadata.tsv",
-        inventory=f"{OUT}/ncbi_datasets_file_inventory.tsv",
-    output:
-        f"{OUT}/gtdb_representatives_with_ncbi_annotation_status.tsv"
-    conda:
-        "envs/python.yaml"
-    log:
-        f"{LOG}/join_annotation_status.log"
-    script:
-        "scripts/join_annotation_status.py"
-
-
-rule summarize_annotation_status:
-    input:
-        all_representatives=f"{OUT}/gtdb_representatives.tsv",
-        filtered=f"{OUT}/gtdb_kept_accessions_metadata.tsv",
-        joined=f"{OUT}/gtdb_representatives_with_ncbi_annotation_status.tsv",
-    output:
-        status=f"{OUT}/summary_annotation_status.tsv",
-        category=f"{OUT}/summary_by_genome_category.tsv",
-        phylum=f"{OUT}/summary_by_gtdb_phylum.tsv",
-        rank=f"{OUT}/summary_by_gtdb_rank.tsv",
-        prefix=f"{OUT}/summary_by_accession_prefix.tsv",
-    conda:
-        "envs/python.yaml"
-    log:
-        f"{LOG}/summarize_annotation_status.log"
-    script:
-        "scripts/summarize_annotation_status.py"

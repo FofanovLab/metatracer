@@ -1,7 +1,0 @@
-name: metatracer-gtdb-python
-channels:
-  - conda-forge
-dependencies:
-  - python>=3.10
-  - pandas>=2.0
-  - ete3>=3.1
