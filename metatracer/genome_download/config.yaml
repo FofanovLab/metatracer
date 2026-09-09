@@ -5,6 +5,6 @@ accession_file: "accessions.txt"
 output_dir: "downloads"
 
 # Use "genome,gff3,protein" when annotations and proteins are also needed.
-include: "genome"
+include: "genome,gff3,protein"
 
 rehydrate_workers: 8
