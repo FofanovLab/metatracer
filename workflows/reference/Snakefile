@@ -1,0 +1,158 @@
+"""Plan reference FASTAs and build every resulting MTSv index."""
+
+import csv
+import shlex
+
+
+configfile: "config.yaml"
+
+OUT = config.get("output_dir", "results/reference").rstrip("/")
+RESOURCES = config.get("resource_dir", f"{OUT}/resources").rstrip("/")
+LISTS = f"{OUT}/fasta-lists"
+INDICES = f"{OUT}/indices"
+MANIFEST = f"{OUT}/reference-manifest.tsv"
+TAXONOMY = f"{OUT}/reference-taxonomy.tsv"
+SUMMARY = f"{OUT}/reference-summary.txt"
+LOGS = config.get("log_dir", f"{OUT}/logs").rstrip("/")
+ACCESSION_TABLE = config["accession_table"]
+DATASET_ZIP = f"{RESOURCES}/references.zip"
+DATASET_ROOT = f"{RESOURCES}/ncbi_dataset"
+DATA_DIR = f"{DATASET_ROOT}/data"
+
+
+def accessions_from_table(path):
+    with open(path, encoding="utf-8", errors="replace", newline="") as handle:
+        first = handle.readline()
+        handle.seek(0)
+        reader = csv.DictReader(handle, delimiter="\t" if "\t" in first else ",")
+        column = next(
+            (name for name in ("accession", "assembly_accession", "ncbi_accession")
+             if name in (reader.fieldnames or [])),
+            None,
+        )
+        if column is None:
+            raise ValueError("accession_table must contain an accession column")
+        accessions = [str(row[column]).strip() for row in reader]
+    if not accessions or any(not accession for accession in accessions):
+        raise ValueError("accession_table contains no accessions or has an empty accession")
+    if len(accessions) != len(set(accessions)):
+        raise ValueError("accession_table contains duplicate accessions")
+    return accessions
+
+
+ACCESSIONS = accessions_from_table(ACCESSION_TABLE)
+
+
+def planned_indices(wildcards):
+    lists_dir = checkpoints.plan_reference.get(**wildcards).output.lists
+    index_ids = sorted(
+        glob_wildcards(
+            str(lists_dir) + "/metatracer_reference.index.{index}.fasta-list.txt"
+        ).index,
+        key=lambda value: int(value),
+    )
+    if not index_ids:
+        raise ValueError("reference-build did not produce any FASTA lists")
+    return expand(f"{INDICES}/metatracer_reference.index.{{index}}.index", index=index_ids)
+
+
+rule all:
+    input:
+        MANIFEST,
+        TAXONOMY,
+        SUMMARY,
+        planned_indices,
+
+
+rule download_references:
+    input:
+        table=ACCESSION_TABLE
+    output:
+        DATASET_ZIP
+    params:
+        accessions=" ".join(shlex.quote(accession) for accession in ACCESSIONS),
+        include=config.get("datasets_include", "genome,gff3,protein"),
+    log:
+        f"{LOGS}/datasets-download.log"
+    shell:
+        """
+        mkdir -p {RESOURCES:q} {LOGS:q}
+        datasets download genome accession \
+          {params.accessions} \
+          --include {params.include:q} \
+          --filename {output:q} \
+          > {log:q} 2>&1
+        """
+
+
+rule unpack_references:
+    input:
+        DATASET_ZIP
+    output:
+        directory(DATASET_ROOT)
+    log:
+        f"{LOGS}/datasets-unpack.log"
+    shell:
+        """
+        mkdir -p {RESOURCES:q} {LOGS:q}
+        unzip -q {input:q} -d {RESOURCES:q} > {log:q} 2>&1
+        """
+
+
+checkpoint plan_reference:
+    input:
+        table=ACCESSION_TABLE,
+        dataset=DATASET_ROOT,
+    output:
+        lists=directory(LISTS),
+        manifest=MANIFEST,
+        taxonomy=TAXONOMY,
+        summary=SUMMARY,
+    params:
+        max_size=config.get("max_index_size_mb", 10000),
+    threads: 1
+    log:
+        f"{LOGS}/reference-build.log"
+    shell:
+        """
+        mkdir -p {OUT:q} {LOGS:q}
+        metatracer reference-build \
+          --data-dir {DATA_DIR:q} \
+          --accession-table {input.table:q} \
+          --out-dir {output.lists:q} \
+          --max-size-mb {params.max_size} \
+          --map-out {output.manifest:q} \
+          --taxonomy-map-out {output.taxonomy:q} \
+          --summary-out {output.summary:q} \
+          > {log:q} 2>&1
+        """
+
+
+rule build_index:
+    input:
+        fasta_list=f"{LISTS}/metatracer_reference.index.{{index}}.fasta-list.txt",
+        manifest=MANIFEST,
+    output:
+        f"{INDICES}/metatracer_reference.index.{{index}}.index"
+    params:
+        occ=config.get("bwt_occ_sample_rate", 64),
+        sa=config.get("sa_sample_rate", 32),
+        skip_missing="--skip-missing" if config.get("skip_missing", False) else "",
+    threads:
+        config.get("index_threads", 1)
+    log:
+        f"{LOGS}/index-{{index}}.log"
+    benchmark:
+        f"{LOGS}/index-{{index}}.benchmark.tsv"
+    shell:
+        """
+        mkdir -p {INDICES:q} {LOGS:q}
+        metatracer index-build \
+          --fasta-list {input.fasta_list:q} \
+          --mapping {input.manifest:q} \
+          --index {output:q} \
+          --bwt-occ-sample-rate {params.occ} \
+          --sa-sample-rate {params.sa} \
+          {params.skip_missing} \
+          > {log:q} 2>&1
+        """
