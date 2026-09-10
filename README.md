@@ -87,14 +87,6 @@ references/ncbi_dataset/data/GCF_XXXXXXX.Y/
 The reference build pulls all references provided from the genome report, reformats the headers, and concatenates them
 into chunks ready for index building. The size of the chunks will play a role in how much memory is required to load each index so consider resources when setting the chunk size. The final index will be ~3.5x the size of the chunked fasta file and will require proportional memory to load during assignment.
 
-For reference FASTA files divided into approximately 10 GB chunks, observed
-resource use per index was:
-
-| Metric             | Mean      | Median    | Range           |
-| ------------------ | --------- | --------- | --------------- |
-| Peak RSS           | 263.0 GiB | 263.2 GiB | 260.6–265.4 GiB |
-| CPU time per index | 1.56 h    | 1.62 h    | 1.17–1.77 h     |
-
 `metatracer reference-build` takes:
 
 * the **base directory containing all GCF subdirectories** 
@@ -147,6 +139,13 @@ The mapping TSV includes:
 ### 1.3 Run `metatracer index-build`
 
 `metatracer index-build` consumes each FASTA file and builds an MG-index.
+
+#### Benchmark for ~10 GB FASTA chunks
+
+| Metric | Mean | Median | Range |
+|---|---:|---:|---:|
+| Peak RSS | 263.0 GiB | 263.2 GiB | 260.6–265.4 GiB |
+| CPU time per index | 1.56 h | 1.62 h | 1.17–1.77 h |
 
 Example:
 
