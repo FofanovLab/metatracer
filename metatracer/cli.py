@@ -231,10 +231,13 @@ def assign_cmd(
 
 
 @cli.command(name="index-build")
-@click.option("-f", "--fasta", "fasta_path", required=True, help="Path to FASTA database file.")
+@click.option("-f", "--fasta", "fasta_paths", multiple=True,
+              help="Path to a FASTA database file; repeat for multiple files.")
+@click.option("--fasta-list", default=None,
+              help="Text file containing one FASTA path per line.")
 @click.option("-i", "--index", "index_path", required=True, help="Path to MG-index file output.")
 @click.option("--mapping", default=None,
-              help="Path to header->taxid/seqid mapping file (columns: header, taxid, seqid). Only required if FASTA headers are not in >seqid-taxid format.")
+              help="Path to header mapping file (columns: header, taxid, alternate_taxid, seqid). Only required if FASTA headers do not encode the IDs.")
 @click.option(
     "--bwt-occ-sample-rate",
     type=int,
@@ -264,7 +267,8 @@ def assign_cmd(
               help="Skip FASTA records missing from the mapping file (warn instead of error).")
 @click.option("-v", "--verbose", count=True, help="Include this flag to trigger debug-level logging.")
 def index_build_cmd(
-    fasta_path: str,
+    fasta_paths: tuple[str, ...],
+    fasta_list: Optional[str],
     index_path: str,
     mapping: Optional[str],
     bwt_occ_sample_rate: int,
@@ -273,15 +277,21 @@ def index_build_cmd(
     verbose: int,
 ) -> None:
     """
-    Build MetaTracer MG-indices from reference sequence chunks. (Wrapper around mtsv-build from mtsv-tools)
+    Build a MetaTracer MG-index from one or more reference FASTAs. (Wrapper around mtsv-build from mtsv-tools)
     """
+    if not fasta_paths and not fasta_list:
+        raise click.ClickException(
+            "Provide at least one --fasta or a --fasta-list.")
     exe = _which_or_die(RUST_BINARIES["index-build"])
     argv = [
-        "--fasta", fasta_path,
         "--index", index_path,
         "--sample-interval", str(bwt_occ_sample_rate),
         "--sa-sample", str(sa_sample_rate),
     ]
+    for fasta_path in fasta_paths:
+        argv += ["--fasta", fasta_path]
+    if fasta_list:
+        argv += ["--fasta-list", fasta_list]
     if mapping:
         argv += ["--mapping", mapping]
     if skip_missing:
