@@ -6,7 +6,12 @@ MetaTracer is organized into two main workflows:
 1) **Reference MG-index build**
 2) **Read assignment + annotation**
 
-The reference workflow prepares NCBI Datasets assemblies (genome FASTA + GFF3 + proteins), reformats/chunks them for indexing, and builds MG-indices. The assignment workflow bins reads against the indices, merges hits from multiple indices and/or samples (i.e. for paired reads), filters hits based on low frequency taxa and edit distances, then annotates hits with taxonomic and CDS/protein data.
+The reference workflow prepares genome FASTA files for indexing and can use
+matching GFF3 annotations and protein sequences during annotation. The
+assignment workflow bins reads against the indices, merges hits from multiple
+indices and/or samples (i.e. for paired reads), filters hits based on low
+frequency taxa and edit distances, then annotates hits with taxonomic and
+CDS/protein data.
 
 Preprint: [MetaTracer bioRxiv manuscript](https://www.biorxiv.org/content/10.64898/2026.02.20.707109.abstract)
 
@@ -14,9 +19,11 @@ Preprint: [MetaTracer bioRxiv manuscript](https://www.biorxiv.org/content/10.648
 
 ## 1) Reference MG-index Build
 
-### 1.1 Download references with NCBI Datasets
+### 1.1 Download reference sequences
 
-MetaTracer uses the [**NCBI Datasets CLI**](https://www.ncbi.nlm.nih.gov/datasets/).
+Reference genomes can be obtained from any source, but MetaTracer works well
+with genome FASTAs, annotations, and protein sequences downloaded using the
+[**NCBI Datasets CLI**](https://www.ncbi.nlm.nih.gov/datasets/).
 Start with a plain-text file containing one versioned NCBI assembly accession
 per line:
 
@@ -131,7 +138,15 @@ The mapping TSV includes:
 
 ### 1.3 Run `metatracer index-build`
 
-`metatracer index-build` consumes the each FASTA file and builds MG-index.
+`metatracer index-build` consumes each FASTA file and builds an MG-index.
+
+For reference FASTA files divided into approximately 10 GB chunks, observed
+resource use per index was:
+
+| Metric             | Mean      | Median    | Range           |
+| ------------------ | --------- | --------- | --------------- |
+| Peak RSS           | 263.0 GiB | 263.2 GiB | 260.6–265.4 GiB |
+| CPU time per index | 1.56 h    | 1.62 h    | 1.17–1.77 h     |
 
 Example:
 
