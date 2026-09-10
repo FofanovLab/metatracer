@@ -8,3 +8,10 @@ output_dir: "downloads"
 include: "genome,gff3,protein"
 
 rehydrate_workers: 8
+
+# Reference planning and MTSv index construction.
+max_index_size_mb: 10000
+bwt_occ_sample_rate: 64
+sa_sample_rate: 32
+index_threads: 4
+skip_missing: false

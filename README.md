@@ -17,6 +17,48 @@ Preprint: [MetaTracer bioRxiv manuscript](https://www.biorxiv.org/content/10.648
 
 ---
 
+## Installation
+
+Install MetaTracer and its dependencies from Conda channels:
+
+```bash
+conda create --name metatracer -c conda-forge -c bioconda metatracer
+conda activate metatracer
+```
+
+### Build the Conda package locally
+
+Clone the repository and install `conda-build` in the base environment if it is
+not already available:
+
+```bash
+git clone https://github.com/FofanovLab/metatracer.git
+cd metatracer
+conda install --name base -c conda-forge conda-build
+```
+
+Build the package using the recipe in `conda/meta.yaml`:
+
+```bash
+conda build -c conda-forge -c bioconda conda
+```
+
+Install the locally built package into a new environment:
+
+```bash
+conda create --name metatracer-local \
+  -c local -c conda-forge -c bioconda metatracer
+conda activate metatracer-local
+```
+
+Confirm the installation:
+
+```bash
+metatracer --help
+```
+
+---
+
 ## 1) Reference MG-index Build
 
 ### 1.1 Download reference sequences
@@ -67,7 +109,7 @@ cd metatracer/genome_download
 snakemake --use-conda --cores 8
 ```
 
-In addition to the rehydrated package, the workflow writes
+In addition to the rehydrated package, the Snakemake workflow writes
 `downloads/accession_taxid.tsv`. It rolls organism TaxIDs up to species (or the
 nearest higher canonical rank) and uses the `accession` and `taxid` columns
 expected by `metatracer reference-build --report`.
@@ -85,15 +127,12 @@ references/ncbi_dataset/data/GCF_XXXXXXX.Y/
 
 ### 1.2 Run `metatracer reference-build`
 
-The reference build scans downloaded genome FASTAs and plans them into
-size-bounded indices. It does not copy, concatenate, split, or rewrite the FASTA
-files. Each source FASTA remains intact and is listed in exactly one index plan.
-A source FASTA larger than the configured target is assigned to an index by
-itself.
+The reference build scans downloaded genome FASTAs creates a plan to add them into
+size-bounded indices.
 
 `metatracer reference-build` takes:
 
-* the base directory containing the assembly subdirectories
+* the base directory containing the assembly subdirectories as described above.
 * an accession table containing `accession` and `taxid`
 * and produces:
 
@@ -103,7 +142,10 @@ itself.
   * a reference-build summary
 
 The accession table may also contain `alternate_taxid` and `index`. An empty or
-missing `alternate_taxid` defaults to `taxid`. If `index` is present, every row
+missing `alternate_taxid` defaults to `taxid`. The `alternate_taxid` allows a different
+taxonomic scheme to be stored for each reference.
+The `index` column is provided to allow users to overide the default behavior and manually assign each sequence to an index.
+If `index` is present, every row
 must have a non-negative integer index assignment and `--max-size-mb` is
 ignored. Otherwise, whole FASTA files are assigned sequentially until the
 configured size target is reached.
@@ -138,7 +180,7 @@ Outputs:
 
 The sequence manifest includes:
 
-* `seqid` (unique integer used in MG-index)
+* `seqid` (build- and index-qualified integer used in MG-index)
 * `assembly` (assembly accession, e.g. `GCF_...`)
 * `taxid`
 * `alternate_taxid`
@@ -146,6 +188,36 @@ The sequence manifest includes:
 * `fasta_path`
 * `header` (contig accession from the original FASTA header, e.g. `NC_...`)
 * `description` (original FASTA header)
+
+Sequence IDs are encoded as:
+
+```text
+(index × 10,000,000) + (three-digit build token × 10,000) + sequence ordinal
+```
+
+Each index receives a different three-digit build token generated from the
+reference-build time plus random entropy. The sequence ordinal starts at one
+within that index. For example, index `10`, build token `123`, and ordinal `42`
+produce seqid `101230042`.
+
+**Use a new build token every time an index is created or rebuilt. Reusing the
+same token with the same index number can reproduce existing sequence IDs and
+cause ambiguous annotations when those indices are used together.** Automatic
+token generation is recommended: MetaTracer creates a distinct token for every
+index planned in a reference-build run and records each index/token pairing in
+the summary.
+
+For a reproducible or administratively assigned token on a build that produces
+exactly one index, pass `--seqid-build-token 123`. Choose a token that has not
+previously been used with that index number. MetaTracer rejects a manual token
+when a reference build produces multiple indices, because each index must have
+its own token.
+
+This layout keeps IDs within the unsigned 32-bit range while greatly reducing
+collisions when manifests from indices created at different times are used
+together. It supports index numbers `0–428` and up to `9,999` sequences per
+index; reference generation stops with a clear error if either limit is
+exceeded.
 
 The supplied taxonomy IDs are used directly; `reference-build` does not infer
 their taxonomy source or automatically roll them to another rank. Both ID
@@ -196,30 +268,11 @@ removed. Retain GFF and protein files when using deposited annotations.
 
 ## 2) Assignment Workflow
 
-### 2.1 QC reads (example with fastp)
-
-MetaTracer assumes reads have been QC’ed prior to assignment.
-
-Example `fastp` command (paired-end):
-
-```bash
-fastp \
-  -i sample_R1.fastq.gz -I sample_R2.fastq.gz \
-  -o sample_R1.qc.fastq.gz -O sample_R2.qc.fastq.gz \
-  --cut_front --cut_tail \
-  --cut_window_size 4 --cut_mean_quality 20 \
-  --length_required 50 \
-  --trim_poly_g \
-  --poly_x_min_len 10 \
-  --n_base_limit 5 \
-  --html sample.fastp.html --json sample.fastp.json \
-```
-
 ---
 
-### 2.2 Run `metatracer assign`
+### 2.1 Run `metatracer assign`
 
-Run `metatracer assign` for each index. For paired-end reads, run it separately on **R1** and **R2** or on merged reads.
+Run `metatracer assign` for each index. For paired-end reads, run it separately on **R1** and **R2** or on merged or concatenated reads. QC should be completed before running assignment step.
 
 Example:
 
@@ -235,9 +288,25 @@ done
 
 If the result file is not empty, `metatracer assign` will resume from the last assigned read and append to the file unless `--force-overwrite` is passed.
 
+#### Binning output
+
+`metatracer assign` writes one line per read using the long output format:
+
+```text
+read1:2-10-4=2,5-12-8=3
+```
+
+The text before the final colon is the read ID. Each comma-separated hit uses
+`TAXID-GID-POSITION=EDIT_DISTANCE`. In the example, TaxID `2` matched GID `10`
+at position `4` with edit distance `2`, while TaxID `5` matched GID `12` at
+position `8` with edit distance `3`.
+
+See the [mtsv_tools output-format documentation](https://github.com/FofanovLab/mtsv_tools#output-format)
+for the upstream format definition.
+
 ---
 
-### 2.2.1 Benchmarking
+### 2.1.1 Benchmarking
 
 We benchmarked `metatracer assign` on a reference collection split into **10 MG-indices** built with:
 
@@ -276,6 +345,8 @@ Observed assignment performance:
 
 `metatracer merge` combines assignment output files into a single per-read assignments file for a sample.
 For paired-end data, pass **all** `.bn` files for the sample (R1 + R2 and any chunks).
+Records are combined only when their read IDs match exactly; mate relationships
+are not inferred from file names or `/1` and `/2` suffixes.
 
 Example:
 
@@ -283,22 +354,42 @@ Example:
 metatracer merge \
   --output merged/sample.assignments.clp \
   --report metatracer_assignment_report.tsv \
-  --threads 16
+  --mode taxid-gi \
+  --threads 16 \
   assignments/sample.R1.chunk.0.bn \
   assignments/sample.R2.chunk.0.bn \
   ...
   assignments/sample.R1.chunk.10.bn \
-  assignments/sample.R2.chunk.10.bn \
+  assignments/sample.R2.chunk.10.bn
 ```
 
-This produces one line per read:
+Because `metatracer assign` writes long-format input, merge writes one compact
+line per read. The output format depends on `--mode`.
 
-* Read ID prefix (everything before the last `:`)
-* A comma-separated list of hits like:
+The `--mode` option controls which hits are retained:
 
-  * `{taxid}-{accession_key}-{pos}={edit}`
+* `--mode taxid` (the default) retains the lowest edit-distance assignment for
+  each TaxID and writes `READ_ID:TAXID=EDIT_DISTANCE,...`.
+* `--mode taxid-gi` retains the lowest edit-distance assignment for each
+  TaxID–GID pair. If tied hits for a pair contain positions, the smaller
+  position is retained. This mode is recommended when downstream annotation is
+  planned because it preserves reference-specific assignments and writes
+  `READ_ID:TAXID-GID-POSITION=EDIT_DISTANCE,...`.
 
-Merge also provides a **per-taxa summary** of assignment counts. This summary is useful for identifying unlikely taxa for the filtering step.
+For example, `--mode taxid-gi` can produce:
+
+```text
+read123:562-10-400=1,562-11-300=1
+```
+
+When `--report` is supplied, merge also writes a headered, per-TaxID TSV with
+the columns `taxid`, `only_hit`, `only_hit_pct`, `only_best`, `only_best_pct`,
+`tied_best`, `tied_best_pct`, `not_best`, `not_best_pct`, `total_reads`, and
+`total_pct`. This report summarizes assignment support and can guide the
+filtering step.
+
+See the [mtsv_tools merge documentation](https://github.com/FofanovLab/mtsv_tools#merge-results-mtsv-collapse)
+for the upstream format definition.
 
 ---
 
@@ -329,41 +420,138 @@ Notes:
 
 ### 2.5 Annotate filtered assignments (`metatracer annotate`)
 
-`metatracer annotate` expands each read hit to a tabular format and (unless `--taxa-only` is used) maps hit positions to CDS/protein annotations using the reference mapping table and indexed GFFs. `--taxa-only` just translates taxids into organism names. 
+`metatracer annotate` expands each read hit to a tabular format and (unless
+`--taxa-only` is used) maps hit positions to deposited CDS and protein
+annotations. Pass the sequence manifest created by `reference-build` and the
+base directory containing the rehydrated NCBI Datasets package.
 
 Example:
 
 ```bash
 metatracer annotate \
-  --map-table metatracer_ref/metatracer_reference.map.tsv \ # Generated during metatracer reference-build
+  --map-table metatracer_ref/build1/metatracer_reference.map.tsv \
+  --map-table metatracer_ref/build2/metatracer_reference.map.tsv \
+  --reference-basepath references \
+  --resource-report annotations/sample.resources.tsv \
   --out annotations/sample.annotated.tsv \
-  --proteins-out annotations/sample.proteins.faa \
-  --threads 8 \
+  --eggnog-cpu 8 \
+  --eggnog-data-dir /path/to/eggnog_data \
   filter/sample.filtered.assignments.clp
-
 ```
+
+Repeat `--map-table` for reference indices built at different times. MetaTracer
+loads their rows as one logical concatenated manifest; the input files retain
+their individual header rows and do not need to be manually combined. Hits are
+resolved using the `(taxid, seqid)` pair stored in assignment output, so the
+same `seqid` may be reused when its TaxID differs. If two manifests assign the
+same `(taxid, seqid)` pair to different reference sequences, annotation stops
+with an ambiguity error because that hit cannot be resolved uniquely after
+merge.
+
+Resource discovery uses glob templates. The defaults match the standard
+rehydrated NCBI Datasets layout:
+
+```text
+GFF:     {basepath}/ncbi_dataset/data/{accession}/*_genomic.gff*
+Protein: {basepath}/ncbi_dataset/data/{accession}/*_protein.faa*
+```
+
+Use `--gff-pattern` or `--protein-pattern` to support another layout. Patterns
+may contain `{basepath}`, `{accession}`, and `{assembly}` placeholders plus
+standard glob wildcards. For example:
+
+```bash
+--gff-pattern '{basepath}/annotations/{accession}/*.gff.gz' \
+--protein-pattern '{basepath}/proteins/{accession}/*.faa'
+```
+
+Each assembly directory must contain exactly one genomic GFF and one protein
+FASTA. A sorted, indexed GFF is reused. An unindexed sorted GFF is BGZF
+compressed and Tabix indexed. An unsorted GFF is written to a new sorted file,
+then compressed and indexed; the downloaded source file is retained.
+
+The resource report contains one row per assembly with these columns:
+
+```tsv
+accession	assembly_path	gff_path	protein_path	gff_sort_status	gff_index_status	status	message
+```
+
+`status` is `READY` when both resources were found and the GFF is usable.
+Missing or ambiguous pattern matches, sorting failures, and indexing failures
+are recorded with a specific failure status and message.
+The complete report is written before annotation stops because of any failed
+assembly. If `--resource-report` is omitted, it defaults to
+`<out>.resources.tsv`.
 
 Recommended:
 
 * Run annotation on filtered assignments to reduce runtime and output size.
-* Keep `metatracer_reference.map.tsv` produced during `reference-build`; it contains the paths needed to resolve assemblies → GFF/protein resources.
+* Keep `metatracer_reference.map.tsv` produced during `reference-build`; its
+  assembly and sequence identifiers connect assignment hits to the downloaded
+  annotation resources.
 
-Example `sample.annotated.tsv` output:
+After deposited CDS annotation, MetaTracer deduplicates the matched protein
+sequences and assigns stable integer `Protein ID` values. The unique protein
+FASTA is passed directly to `emapper.py`; it is an internal intermediate rather
+than a separate requested output. The eggNOG query ID is the same `Protein ID`,
+so eggNOG annotations can be joined back to every corresponding read/CDS row.
 
-```tsv
-read_id	taxid	taxon_name	accession_key	contig_pos	edit	assembly	contig	gene_id	locus_tag	product	protein_id	strand	cds_start	cds_end
-M01234:56:000000000-ABCD1:1:1101:10234:1056	562	Escherichia coli	18422	NC_000913.3:345671	2	GCF_000005845.2	NC_000913.3	b0002	thrA	aspartokinase/homoserine dehydrogenase	NP_414543.1	+	337	2799
-M01234:56:000000000-ABCD1:1:1101:10234:1056	562	Escherichia coli	18422	NC_000913.3:345872	2	GCF_000005845.2	NC_000913.3	b0002	thrA	aspartokinase/homoserine dehydrogenase	NP_414543.1	+	337	2799
-M01234:56:000000000-ABCD1:1:1101:9988:1120	1280	Staphylococcus aureus	23107	NZ_CP000253.1:112934	1	GCF_000013425.1	NZ_CP000253.1	SAUSA300_0102	SAUSA300_0102	putative membrane protein	WP_000123456.1	-	112801	113220
+All columns returned in the eggNOG `.emapper.annotations` table, other than its
+query column, are appended to `sample.annotated.tsv` with an `eggnog_` prefix.
+MetaTracer also adds `eggnog_OG`, a simplified counting field derived from the
+first value in `eggnog_eggNOG_OGs`. The taxonomic suffix is removed; for
+example, `COG1234@1|root,COG1234@2|Bacteria` becomes `COG1234`.
+Rows without a deposited protein or an eggNOG match have empty eggNOG fields.
+The `Eggnog` column records `SUCCESS`, `FAILED`, or `NOT_RUN_NO_PROTEIN` for
+every output row. An eggNOG executable, database, or runtime failure produces a
+prominent warning but does not discard the completed deposited annotations;
+those rows are written with `Eggnog=FAILED` and empty eggNOG annotation fields.
+Use `--emapper` to select another executable and repeat `--emapper-arg` for
+additional eggNOG-mapper arguments. The eggNOG database must already be
+installed; provide its location with `--eggnog-data-dir` when it is not in the
+eggNOG-mapper default location.
+
+### 2.6 Count annotation groups (`metatracer count`)
+
+`metatracer count` counts reads by any column in the final annotation table.
+Repeat `--column` to count joint combinations:
+
+```bash
+metatracer count \
+  --input annotations/sample.annotated.tsv \
+  --output annotations/sample.taxid_eggnog_counts.tsv \
+  --column taxid \
+  --column eggnog_OG
 ```
 
-Example `sample.proteins.faa` output (unique protein sequences referenced by annotated hits):
+Column names are matched without regard to capitalization or punctuation, so
+`--column taxid` matches the annotation column `Taxid`. For each read, all
+distinct values found for a selected column are sorted and joined with `;`.
+A read assigned to taxids 123 and 1234 therefore contributes one integer count
+to `123;1234`, not a fractional count to each taxid. Repeated annotation rows
+and repeated values do not increase the count. When multiple columns are
+selected, the complete per-read combination is counted as one group.
 
-```fasta
->NP_414543.1 aspartokinase/homoserine dehydrogenase [Escherichia coli]
-MNNR...KQ
->WP_000123456.1 putative membrane protein [Staphylococcus aureus]
-MFKK...LL
+The output is a TSV containing `sample_id`, the requested columns, and `count`.
+If an input has a `sample_id` or `sample` column, that value is used; otherwise,
+the input filename stem is the sample ID. Repeat `--input` to count multiple
+annotation tables together.
+
+**Blank values are not counted.** If a read has a blank value—or a missing-value
+marker such as `NA`, `N/A`, `NONE`, or `-`—in any requested `--column`, the
+entire read is omitted from that counting run. It is not placed in a blank or
+`UNASSIGNED` group. This is particularly important for `--column eggnog_OG`:
+reads for which eggNOG failed, did not run, or returned no OG are excluded from
+the resulting counts. Select only `--column taxid` when those reads should
+still contribute to taxonomic counts.
+
+Selected columns from an example `sample.annotated.tsv` output are shown below;
+the actual file includes all deposited-annotation columns followed by all
+columns reported by the installed eggNOG-mapper version:
+
+```tsv
+ReadID	Taxid	Assembly	Accession	Position	CDS ID	Protein ID	Annotation	Eggnog	eggnog_seed_ortholog	eggnog_evalue	eggnog_Description
+M01234:56:1:1101:10234:1056	562	GCF_000005845.2	NC_000913.3	345671	NP_414543.1	1	aspartokinase/homoserine dehydrogenase	SUCCESS	223283.B0002	1e-120	aspartate-semialdehyde dehydrogenase
 ```
 
 ---

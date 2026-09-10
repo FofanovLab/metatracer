@@ -1,4 +1,4 @@
-"""Download and rehydrate NCBI genome assemblies from an accession list."""
+"""Download NCBI assemblies and build all planned MetaTracer indices."""
 
 configfile: "config.yaml"
 
@@ -8,12 +8,37 @@ ARCHIVE = f"{OUT}/ncbi_dataset.zip"
 DATASET = f"{OUT}/package"
 ACCESSION_TAXIDS = f"{OUT}/accession_taxid.tsv"
 LOGS = f"{OUT}/logs"
+REFERENCE = f"{OUT}/reference"
+LISTS = f"{REFERENCE}/fasta-lists"
+INDICES = f"{REFERENCE}/indices"
+MANIFEST = f"{REFERENCE}/metatracer_reference.map.tsv"
+TAXONOMY = f"{REFERENCE}/metatracer_reference.taxonomy.tsv"
+SUMMARY = f"{REFERENCE}/metatracer_reference.summary.txt"
+DATA_DIR = f"{DATASET}/ncbi_dataset/data"
+
+
+def planned_indices(wildcards):
+    lists = checkpoints.build_reference.get(**wildcards).output.lists
+    index_ids = sorted(
+        glob_wildcards(
+            str(lists) + "/metatracer_reference.index.{index}.fasta-list.txt"
+        ).index,
+        key=int,
+    )
+    if not index_ids:
+        raise ValueError("reference-build did not produce any FASTA path lists")
+    return expand(
+        f"{INDICES}/metatracer_reference.index.{{index}}.index",
+        index=index_ids,
+    )
 
 
 rule all:
     input:
-        DATASET,
-        ACCESSION_TAXIDS,
+        MANIFEST,
+        TAXONOMY,
+        SUMMARY,
+        planned_indices,
 
 
 rule download_dehydrated:
@@ -130,4 +155,65 @@ rule extract_and_rehydrate:
           --max-workers {threads} \
           --no-progressbar \
           >> {log:q} 2>&1
+        """
+
+
+checkpoint build_reference:
+    input:
+        dataset=DATASET,
+        accessions=ACCESSION_TAXIDS,
+    output:
+        lists=directory(LISTS),
+        manifest=MANIFEST,
+        taxonomy=TAXONOMY,
+        summary=SUMMARY,
+    params:
+        data_dir=DATA_DIR,
+        max_size=config.get("max_index_size_mb", 10000),
+    log:
+        f"{LOGS}/reference-build.log"
+    shell:
+        """
+        mkdir -p {REFERENCE:q} {LOGS:q}
+        metatracer reference-build \
+          --data-dir {params.data_dir:q} \
+          --accession-table {input.accessions:q} \
+          --out-dir {output.lists:q} \
+          --max-size-mb {params.max_size} \
+          --map-out {output.manifest:q} \
+          --taxonomy-map-out {output.taxonomy:q} \
+          --summary-out {output.summary:q} \
+          > {log:q} 2>&1
+        """
+
+
+rule build_index:
+    input:
+        fasta_list=f"{LISTS}/metatracer_reference.index.{{index}}.fasta-list.txt",
+        manifest=MANIFEST,
+    output:
+        f"{INDICES}/metatracer_reference.index.{{index}}.index"
+    params:
+        occ=config.get("bwt_occ_sample_rate", 64),
+        sa=config.get("sa_sample_rate", 32),
+        skip_missing="--skip-missing" if config.get("skip_missing", False) else "",
+    threads:
+        config.get("index_threads", 1)
+    log:
+        f"{LOGS}/index-{{index}}.log"
+    benchmark:
+        f"{LOGS}/index-{{index}}.benchmark.tsv"
+    wildcard_constraints:
+        index="[0-9]+"
+    shell:
+        """
+        mkdir -p {INDICES:q} {LOGS:q}
+        metatracer index-build \
+          --fasta-list {input.fasta_list:q} \
+          --mapping {input.manifest:q} \
+          --index {output:q} \
+          --bwt-occ-sample-rate {params.occ} \
+          --sa-sample-rate {params.sa} \
+          {params.skip_missing} \
+          > {log:q} 2>&1
         """

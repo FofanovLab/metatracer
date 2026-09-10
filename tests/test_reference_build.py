@@ -2,6 +2,8 @@ import json
 import csv
 from pathlib import Path
 
+import pytest
+
 from metatracer import reference_build as rb
 
 
@@ -75,6 +77,16 @@ def test_fasta_record_bytes_and_write(tmp_path):
     assert out.read_text(encoding="utf-8") == ">rec1\nACGT\n"
 
 
+def test_seqid_encodes_index_build_token_and_per_index_ordinal():
+    assert rb.encode_seqid(0, 123, 1) == 1_230_001
+    assert rb.encode_seqid(10, 123, 42) == 101_230_042
+
+
+def test_seqid_rejects_more_than_four_ordinal_digits():
+    with pytest.raises(SystemExit, match="more than 9,999 sequences"):
+        rb.encode_seqid(0, 123, 10_000)
+
+
 def test_build_reference_plans_whole_fastas_and_writes_dual_taxonomy_manifest(
     tmp_path, monkeypatch
 ):
@@ -98,6 +110,8 @@ def test_build_reference_plans_whole_fastas_and_writes_dual_taxonomy_manifest(
         "resolve_ncbi_species_taxids",
         lambda taxids: ({taxid: taxid for taxid in taxids}, {taxid: "species" for taxid in taxids}),
     )
+    tokens = iter([123, 124])
+    monkeypatch.setattr(rb, "create_seqid_build_token", lambda: next(tokens))
 
     lists_dir = tmp_path / "fasta-lists"
     sequence_manifest = tmp_path / "reference.tsv"
@@ -123,8 +137,8 @@ def test_build_reference_plans_whole_fastas_and_writes_dual_taxonomy_manifest(
         rows = list(csv.DictReader(handle, delimiter="\t"))
     assert [(row["header"], row["seqid"], row["taxid"], row["alternate_taxid"], row["index"])
             for row in rows] == [
-        ("NC_1", "1", "101", "100101", "0"),
-        ("NC_2", "2", "202", "100202", "1"),
+        ("NC_1", "1230001", "101", "100101", "0"),
+        ("NC_2", "11240001", "202", "100202", "1"),
     ]
     assert [row["original_alternate_taxid"] for row in rows] == [
         "GTDB_100101", "GTDB_100202"

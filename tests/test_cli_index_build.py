@@ -40,3 +40,18 @@ def test_index_build_requires_a_fasta_source():
     result = CliRunner().invoke(cli, ["index-build", "--index", "reference.index"])
     assert result.exit_code == 1
     assert "at least one --fasta or a --fasta-list" in result.output
+
+
+def test_assign_uses_long_output_format():
+    with (
+        patch("metatracer.cli._which_or_die", return_value="/bin/mtsv-binner"),
+        patch("metatracer.cli._run") as run,
+    ):
+        result = CliRunner().invoke(cli, [
+            "assign", "--fastq", "reads.fastq", "--index", "reference.index",
+            "--results", "assignments.tsv",
+        ])
+
+    assert result.exit_code == 0, result.output
+    argv = run.call_args.args[1]
+    assert argv[argv.index("--output-format") + 1] == "long"

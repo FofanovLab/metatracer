@@ -56,8 +56,11 @@ from __future__ import annotations
 import argparse
 import csv
 import gzip
+import hashlib
 import json
 import logging
+import secrets
+import time
 import os
 from collections import Counter
 from glob import glob
@@ -96,6 +99,40 @@ REPORT_COL_CANDIDATES = {
     "taxid": ["tax_id", "taxid", "taxId", "organism_tax_id", "organism_taxid"],
 }
 UINT32_MAX = (1 << 32) - 1
+SEQID_INDEX_FACTOR = 10_000_000
+SEQID_BUILD_FACTOR = 10_000
+SEQID_MAX_PER_INDEX = 9_999
+SEQID_MAX_INDEX = 428
+
+
+def create_seqid_build_token() -> int:
+    """Create a three-digit token from build time plus process-local entropy."""
+    material = f"{time.time_ns()}:{secrets.token_hex(8)}".encode("ascii")
+    digest = hashlib.blake2s(material, digest_size=4).digest()
+    return 100 + (int.from_bytes(digest, "big") % 900)
+
+
+def encode_seqid(index_number: int, build_token: int, ordinal: int) -> int:
+    """Encode index, three-digit build token, and four-digit sequence ordinal."""
+    if index_number < 0 or index_number > SEQID_MAX_INDEX:
+        raise SystemExit(
+            f"Index {index_number} cannot be encoded in a 32-bit sequence ID; "
+            f"supported range is 0..{SEQID_MAX_INDEX}"
+        )
+    if build_token < 100 or build_token > 999:
+        raise SystemExit("Sequence-ID build token must be a three-digit integer (100..999)")
+    if ordinal < 1 or ordinal > SEQID_MAX_PER_INDEX:
+        raise SystemExit(
+            f"Index {index_number} contains more than {SEQID_MAX_PER_INDEX:,} sequences"
+        )
+    seqid = (
+        index_number * SEQID_INDEX_FACTOR
+        + build_token * SEQID_BUILD_FACTOR
+        + ordinal
+    )
+    if seqid > UINT32_MAX:
+        raise SystemExit(f"Encoded sequence ID exceeds the unsigned 32-bit limit: {seqid}")
+    return seqid
 
 
 def read_supplied_taxonomy_table(
@@ -1097,6 +1134,7 @@ def build_reference(
     force_reindex: bool,
     mapping_only: bool,
     taxonomy_source: str,
+    seqid_build_token: Optional[int] = None,
 ) -> None:
     """Plan source FASTA files into size-bounded indices without concatenating them."""
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1104,6 +1142,10 @@ def build_reference(
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     taxonomy_map_path.parent.mkdir(parents=True, exist_ok=True)
     max_bytes = int(max_size_mb) * 1024 * 1024
+    if seqid_build_token is not None and (
+        seqid_build_token < 100 or seqid_build_token > 999
+    ):
+        raise SystemExit("--seqid-build-token must be between 100 and 999")
     predefined_indices = read_predefined_indices(report_path)
     if predefined_indices is None and max_bytes <= 0:
         raise SystemExit("--max-size-mb must be > 0")
@@ -1303,7 +1345,8 @@ def build_reference(
     processed_assemblies: set[str] = set()
     reference_skip_reason: Dict[str, str] = {}
     assemblies_per_taxid: Counter = Counter()
-    seqid = 1
+    sequences_per_index: Dict[int, int] = {}
+    build_tokens: Dict[int, int] = {}
 
     for assembly, taxid in primary_by_assembly.items():
         assembly_dir_name = resolve_assembly_dir_name(
@@ -1346,7 +1389,23 @@ def build_reference(
         gff_path = gff if gff is not None else "NA"
         protein_path = protein if protein is not None else "NA"
         alt_taxid = alternate_by_assembly[assembly]
+        if index_number not in build_tokens:
+            if seqid_build_token is not None:
+                if build_tokens:
+                    raise SystemExit(
+                        "--seqid-build-token can only be used when reference-build "
+                        "produces one index; each index requires a different token"
+                    )
+                build_tokens[index_number] = seqid_build_token
+            else:
+                token = create_seqid_build_token()
+                while token in build_tokens.values():
+                    token = create_seqid_build_token()
+                build_tokens[index_number] = token
+        build_token = build_tokens[index_number]
         for header, description in records:
+            ordinal = sequences_per_index.get(index_number, 0) + 1
+            seqid = encode_seqid(index_number, build_token, ordinal)
             manifest_rows.append({
                 "accession": assembly,
                 "assembly": assembly_dir_name,
@@ -1362,7 +1421,7 @@ def build_reference(
                 "taxid_source": primary_source_by_assembly[assembly],
                 "alternate_taxid_source": alternate_source_by_assembly[assembly],
             })
-            seqid += 1
+            sequences_per_index[index_number] = ordinal
         processed_assemblies.add(assembly)
         assemblies_per_taxid[taxid] += 1
 
@@ -1408,6 +1467,7 @@ def build_reference(
         handle.write(f"Assemblies processed: {len(processed_assemblies):,}\n")
         handle.write(f"Unique primary taxa:  {len(assemblies_per_taxid):,}\n")
         handle.write(f"Total sequences:      {len(manifest_rows):,}\n")
+        handle.write("Sequence-ID layout:    index * 10000000 + token * 10000 + ordinal\n")
         handle.write(f"Taxonomy ID policy:   {taxonomy_source}\n")
         handle.write(
             f"Index placement:       {'predefined by report index column' if predefined_indices is not None else 'size-based'}\n"
@@ -1418,10 +1478,11 @@ def build_reference(
         handle.write(f"Indices planned:      {len(index_paths):,}\n")
         handle.write("GFF indexing:          deferred to annotation preflight\n\n")
         handle.write("Index plan:\n")
-        handle.write("  index\tfastas\tlogical_bytes\tpath_list\n")
+        handle.write("  index\tseqid_build_token\tfastas\tlogical_bytes\tpath_list\n")
         for index_number, paths in sorted(index_paths.items()):
             handle.write(
-                f"  {index_number}\t{len(paths)}\t{index_sizes[index_number]}\t"
+                f"  {index_number}\t{build_tokens[index_number]}\t{len(paths)}\t"
+                f"{index_sizes[index_number]}\t"
                 f"metatracer_reference.index.{index_number}.fasta-list.txt\n"
             )
         handle.write("\nAssemblies per primary taxonomy ID:\n")
@@ -1451,6 +1512,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="Output directory for per-index FASTA path lists.")
     ap.add_argument("--max-size-mb", type=int, default=10000,
                     help="Target max logical FASTA size per index in MB (files never split).")
+    ap.add_argument("--seqid-build-token", type=int, default=None,
+                    help="Three-digit token for a single-index build (default: a new token per index).")
     ap.add_argument("--mapping-only", action="store_true",
                     help=argparse.SUPPRESS)
     ap.add_argument("--map-out", default=None,
@@ -1495,6 +1558,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         force_reindex=False,
         mapping_only=args.mapping_only,
         taxonomy_source=args.taxonomy_source,
+        seqid_build_token=args.seqid_build_token,
     )
     return 0
 

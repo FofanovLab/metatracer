@@ -14,14 +14,13 @@ Where each hit is either:
   (B) {taxid}={edit}
 
 Required mapping table (one or more TSV/CSV with header):
-  seqid, assembly, taxid, header, description, gff, protein_fasta
+  seqid, assembly, taxid, header, description
 
   seqid is unique identifier used to build reference index.
   assembly is the GFF assembly name (e.g. GCF_000123456.1).
   header is the contig name (e.g. NC_000001.11).
   description is the original sequence header string.
-  gff is the path the the GFF file for this assembly (bgzipped + tabix-indexed).
-  protein_fasta is the path to the protein FASTA for this assembly.
+  GFF and protein resources are located below the NCBI Datasets base path.
 
 Output TSV columns:
   ReadID, Taxid, Organism Name, Assembly, Accession, Description, Position, Edit Distance
@@ -45,13 +44,17 @@ from __future__ import annotations
 
 import argparse
 import csv
+import glob
 import gzip
 import heapq
 import logging
 import os
 import re
+import shutil
+import subprocess
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Optional, Tuple
 
 
@@ -74,11 +77,13 @@ def _require(modname: str, extra_hint: str = ""):
 @dataclass(frozen=True)
 class MappingRow:
     seqid: str
+    taxid: int
     assembly: str
     accession: str
     acc_desc: str
     gff_path: str
     protein_fa_path: str
+    resource_accession: str = ""
 
 
 @dataclass
@@ -150,25 +155,29 @@ def sniff_delimiter(path: str) -> str:
     return "\t" if "\t" in first else ","
 
 
-def load_mapping_table(path: str) -> Tuple[Dict[str, MappingRow], Dict[str, MappingRow]]:
+def load_mapping_table(
+    path: str,
+) -> Tuple[Dict[Tuple[int, str], MappingRow], Dict[str, MappingRow]]:
     """
     Returns:
-      - by_seqid: seqid -> MappingRow
+      - by_hit: (taxid, seqid) -> MappingRow
       - by_assembly: assembly -> MappingRow (for resources: GFF/protein_fasta)
 
     Required columns:
-      seqid, assembly, header, description, gff, protein_fasta
+      seqid, taxid, assembly, header, description
+
+    Optional columns:
+      gff, protein_fasta
     """
     delim = sniff_delimiter(path)
     opener = gzip.open if path.endswith(".gz") else open
 
-    by_key: Dict[str, MappingRow] = {}
+    by_key: Dict[Tuple[int, str], MappingRow] = {}
     by_asm: Dict[str, MappingRow] = {}
 
     with opener(path, "rt", encoding="utf-8", errors="replace", newline="") as f:
         reader = csv.DictReader(f, delimiter=delim)
-        req = {"seqid", "assembly", "header",
-               "description", "gff", "protein_fasta"}
+        req = {"seqid", "taxid", "assembly", "header", "description"}
         missing = req - set(reader.fieldnames or [])
         if missing:
             raise SystemExit(
@@ -177,14 +186,22 @@ def load_mapping_table(path: str) -> Tuple[Dict[str, MappingRow], Dict[str, Mapp
         for row in reader:
             m = MappingRow(
                 seqid=row["seqid"],
+                taxid=int(row["taxid"]),
                 assembly=row["assembly"],
                 accession=row["header"],
                 acc_desc=row["description"],
-                gff_path=clean_path(row["gff"]),
-                protein_fa_path=clean_path(row["protein_fasta"]),
+                gff_path=clean_path(row.get("gff", "")),
+                protein_fa_path=clean_path(row.get("protein_fasta", "")),
+                resource_accession=(row.get("accession", "") or row["assembly"]).strip(),
             )
             if m.seqid:
-                by_key[m.seqid] = m
+                key = (m.taxid, m.seqid)
+                previous = by_key.get(key)
+                if previous is not None and previous != m:
+                    raise SystemExit(
+                        f"Ambiguous mapping for taxid={m.taxid}, seqid={m.seqid} in {path}"
+                    )
+                by_key[key] = m
             # assembly resources: last one wins if duplicates (acceptable, but you can tighten later)
             if m.assembly:
                 by_asm[m.assembly] = m
@@ -212,20 +229,25 @@ def _prefer_mapping_row(prev: MappingRow, new: MappingRow) -> MappingRow:
     return new if new_score >= prev_score else prev
 
 
-def load_mapping_tables(paths: List[str]) -> Tuple[Dict[str, MappingRow], Dict[str, MappingRow]]:
-    by_key: Dict[str, MappingRow] = {}
+def load_mapping_tables(
+    paths: List[str],
+) -> Tuple[Dict[Tuple[int, str], MappingRow], Dict[str, MappingRow]]:
+    by_key: Dict[Tuple[int, str], MappingRow] = {}
     by_asm: Dict[str, MappingRow] = {}
 
     for path in paths:
         sub_by_key, sub_by_asm = load_mapping_table(path)
         for k, v in sub_by_key.items():
             if k in by_key:
-                logging.warning(
-                    "Duplicate seqid '%s' in mapping tables; keeping last from %s",
-                    k,
-                    path,
-                )
-                by_key[k] = _prefer_mapping_row(by_key[k], v)
+                previous = by_key[k]
+                if previous.assembly != v.assembly or previous.accession != v.accession:
+                    raise SystemExit(
+                        "Ambiguous mapping across manifests for "
+                        f"taxid={k[0]}, seqid={k[1]}: "
+                        f"{previous.assembly}/{previous.accession} and "
+                        f"{v.assembly}/{v.accession}"
+                    )
+                by_key[k] = _prefer_mapping_row(previous, v)
             else:
                 by_key[k] = v
         for k, v in sub_by_asm.items():
@@ -240,6 +262,247 @@ def load_mapping_tables(paths: List[str]) -> Tuple[Dict[str, MappingRow], Dict[s
                 by_asm[k] = v
 
     return by_key, by_asm
+
+
+# ----------------------------
+# Deposited annotation resource preparation
+# ----------------------------
+
+RESOURCE_REPORT_FIELDS = [
+    "accession", "assembly_path", "gff_path", "protein_path",
+    "gff_sort_status", "gff_index_status", "status", "message",
+]
+DEFAULT_GFF_PATTERN = "{basepath}/ncbi_dataset/data/{accession}/*_genomic.gff*"
+DEFAULT_PROTEIN_PATTERN = "{basepath}/ncbi_dataset/data/{accession}/*_protein.faa*"
+
+
+def validate_gff_sort_order(gff_path: str) -> None:
+    """Validate that feature rows are grouped by contig and sorted by start."""
+    opener = gzip.open if gff_path.endswith(".gz") else open
+    current_contig: Optional[str] = None
+    completed_contigs: set[str] = set()
+    last_start = -1
+    with opener(gff_path, "rt", encoding="utf-8", errors="replace") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            if line.startswith("##FASTA"):
+                break
+            if not line or line.startswith("#"):
+                continue
+            fields = line.rstrip("\n").split("\t")
+            if len(fields) < 5:
+                continue
+            try:
+                start = int(fields[3])
+            except ValueError:
+                continue
+            contig = fields[0]
+            if contig != current_contig:
+                if contig in completed_contigs:
+                    raise ValueError(
+                        f"GFF contig {contig!r} is not contiguous at line {line_number}"
+                    )
+                if current_contig is not None:
+                    completed_contigs.add(current_contig)
+                current_contig = contig
+                last_start = -1
+            if start < last_start:
+                raise ValueError(
+                    f"GFF coordinates are not sorted at line {line_number}: "
+                    f"{contig}:{start} follows {last_start}"
+                )
+            last_start = start
+
+
+def _gff_record(line: str) -> Optional[Tuple[str, int, int, str]]:
+    fields = line.rstrip("\n").split("\t")
+    if len(fields) < 5:
+        return None
+    try:
+        return fields[0], int(fields[3]), int(fields[4]), line
+    except ValueError:
+        return None
+
+
+def sort_gff(source: str, destination: str) -> None:
+    """Write a coordinate-sorted GFF, excluding any embedded FASTA section."""
+    opener = gzip.open if source.endswith(".gz") else open
+    comments: List[str] = []
+    records: List[Tuple[str, int, int, str]] = []
+    with opener(source, "rt", encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            if line.startswith("##FASTA"):
+                break
+            if line.startswith("#"):
+                comments.append(line)
+                continue
+            record = _gff_record(line)
+            if record is not None:
+                records.append(record)
+    records.sort(key=lambda record: (record[0], record[1], record[2]))
+    with open(destination, "wt", encoding="utf-8", newline="") as handle:
+        handle.writelines(comments)
+        handle.writelines(record[3] for record in records)
+
+
+def _find_pattern_resource(
+    pattern: str,
+    base_path: str,
+    accession: str,
+    assembly: str,
+    allowed_endings: Tuple[str, ...],
+) -> Tuple[Optional[Path], str]:
+    try:
+        rendered = pattern.format(
+            basepath=str(Path(base_path).resolve()),
+            accession=accession,
+            assembly=assembly,
+        )
+    except KeyError as exc:
+        return None, f"unknown pattern placeholder {exc}"
+    matches = [
+        Path(path) for path in glob.glob(rendered)
+        if Path(path).is_file() and path.endswith(allowed_endings)
+    ]
+    unique = sorted(set(matches))
+    if not unique:
+        return None, f"no files matched {rendered}"
+    indexed = [path for path in unique if Path(str(path) + ".tbi").exists()]
+    if len(indexed) == 1:
+        return indexed[0], "found"
+    uncompressed_names = {str(path).removesuffix(".gz") for path in unique}
+    if len(uncompressed_names) == 1:
+        compressed = [path for path in unique if path.suffix == ".gz"]
+        return (compressed[0] if compressed else unique[0]), "found"
+    if len(unique) > 1:
+        return None, "multiple files found: " + ", ".join(str(path) for path in unique)
+    return unique[0], "found"
+
+
+def _write_resource_report(path: str, rows: List[dict]) -> None:
+    report_path = Path(path)
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    with report_path.open("wt", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=RESOURCE_REPORT_FIELDS, delimiter="\t")
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def prepare_annotation_resources(
+    by_assembly: Dict[str, MappingRow],
+    base_path: str,
+    report_path: str,
+    gff_pattern: str = DEFAULT_GFF_PATTERN,
+    protein_pattern: str = DEFAULT_PROTEIN_PATTERN,
+) -> Tuple[Dict[str, MappingRow], bool]:
+    """Resolve, sort, compress, and index deposited resources for every assembly."""
+    rows: List[dict] = []
+    prepared: Dict[str, MappingRow] = {}
+    all_ready = True
+    try:
+        pysam = _require("pysam", "Install pysam to prepare GFF Tabix indexes.")
+    except SystemExit as exc:
+        for assembly in sorted(by_assembly):
+            accession = by_assembly[assembly].resource_accession or assembly
+            rows.append({
+                "accession": accession, "assembly_path": "", "gff_path": "",
+                "protein_path": "", "gff_sort_status": "NOT_CHECKED",
+                "gff_index_status": "FAILED", "status": "PREPARATION_FAILED",
+                "message": str(exc),
+            })
+        _write_resource_report(report_path, rows)
+        return prepared, False
+
+    for assembly in sorted(by_assembly):
+        mapping = by_assembly[assembly]
+        accession = mapping.resource_accession or assembly
+        row = {
+            "accession": accession, "assembly_path": "", "gff_path": "",
+            "protein_path": "", "gff_sort_status": "NOT_CHECKED",
+            "gff_index_status": "NOT_CHECKED", "status": "READY", "message": "",
+        }
+        gff, gff_result = _find_pattern_resource(
+            gff_pattern, base_path, accession, assembly, (".gff", ".gff.gz")
+        )
+        protein, protein_result = _find_pattern_resource(
+            protein_pattern, base_path, accession, assembly, (".faa", ".faa.gz")
+        )
+        assembly_dir = (
+            gff.parent if gff is not None else
+            protein.parent if protein is not None else
+            Path(base_path) / "ncbi_dataset" / "data" / accession
+        )
+        row["assembly_path"] = str(assembly_dir.resolve())
+        row["gff_path"] = str(gff.resolve()) if gff else ""
+        row["protein_path"] = str(protein.resolve()) if protein else ""
+        if gff is None or protein is None:
+            missing = []
+            if gff is None:
+                missing.append("GFF: " + gff_result)
+            if protein is None:
+                missing.append("protein FASTA: " + protein_result)
+            row.update(status="MISSING_OR_AMBIGUOUS_RESOURCE", message="; ".join(missing))
+            rows.append(row)
+            all_ready = False
+            continue
+        try:
+            validate_gff_sort_order(str(gff))
+            row["gff_sort_status"] = "ALREADY_SORTED"
+            sorted_gff = gff
+        except (OSError, ValueError) as exc:
+            gff_stem = gff.name.removesuffix(".gz").removesuffix(".gff")
+            sorted_plain = assembly_dir / (gff_stem + ".sorted.gff")
+            try:
+                sort_gff(str(gff), str(sorted_plain))
+                validate_gff_sort_order(str(sorted_plain))
+                sorted_gff = sorted_plain
+                row["gff_sort_status"] = "SORTED"
+                row["message"] = str(exc)
+            except Exception as sort_exc:
+                row.update(
+                    gff_sort_status="FAILED", gff_index_status="NOT_ATTEMPTED",
+                    status="GFF_SORT_FAILED", message=str(sort_exc),
+                )
+                rows.append(row)
+                all_ready = False
+                continue
+
+        indexed_gff = sorted_gff
+        try:
+            if sorted_gff.suffix == ".gz" and Path(str(sorted_gff) + ".tbi").exists():
+                pysam.TabixFile(str(sorted_gff)).close()
+                row["gff_index_status"] = "ALREADY_INDEXED"
+            else:
+                if sorted_gff.suffix == ".gz":
+                    plain = assembly_dir / (sorted_gff.name.removesuffix(".gz") + ".for_tabix.gff")
+                    with gzip.open(sorted_gff, "rt", encoding="utf-8", errors="replace") as src, \
+                            plain.open("wt", encoding="utf-8", newline="") as dst:
+                        for line in src:
+                            if line.startswith("##FASTA"):
+                                break
+                            dst.write(line)
+                    indexed_gff = Path(pysam.tabix_index(
+                        str(plain), preset="gff", force=True, keep_original=False
+                    ))
+                else:
+                    indexed_gff = Path(pysam.tabix_index(
+                        str(sorted_gff), preset="gff", force=True, keep_original=True
+                    ))
+                pysam.TabixFile(str(indexed_gff)).close()
+                row["gff_index_status"] = "INDEXED"
+        except Exception as exc:
+            row.update(gff_index_status="FAILED", status="GFF_INDEX_FAILED", message=str(exc))
+            rows.append(row)
+            all_ready = False
+            continue
+
+        row["gff_path"] = str(indexed_gff.resolve())
+        prepared[assembly] = replace(
+            mapping, gff_path=row["gff_path"], protein_fa_path=row["protein_path"]
+        )
+        rows.append(row)
+
+    _write_resource_report(report_path, rows)
+    return prepared, all_ready
 
 
 # ----------------------------
@@ -650,6 +913,123 @@ class ProteinIndexer:
         return pid
 
 
+DEFAULT_EGGNOG_FIELDS = [
+    "seed_ortholog", "evalue", "score", "eggNOG_OGs", "max_annot_lvl",
+    "COG_category", "Description", "Preferred_name", "GOs", "EC",
+    "KEGG_ko", "KEGG_Pathway", "KEGG_Module", "KEGG_Reaction", "CAZy", "PFAMs",
+]
+
+
+def _eggnog_output_name(source: str) -> str:
+    name = source.lstrip("#")
+    if name.lower().startswith("eggnog_"):
+        name = name[len("eggnog_"):]
+    return "eggnog_" + name
+
+
+def eggnog_og_base(value: str) -> str:
+    """Return the first eggNOG orthologous group without its taxonomic suffix."""
+    first = (value or "").split(",", 1)[0].strip()
+    if not first or first in {"-", "NA", "N/A"}:
+        return ""
+    return first.split("@", 1)[0].strip()
+
+
+def read_eggnog_annotations(
+    path: str,
+) -> Tuple[List[Tuple[str, str]], Dict[str, Dict[str, str]]]:
+    """Return eggNOG columns and annotations keyed by MetaTracer Protein ID."""
+    header: Optional[List[str]] = None
+    annotations: Dict[str, Dict[str, str]] = {}
+    with open(path, "rt", encoding="utf-8", errors="replace") as handle:
+        for raw in handle:
+            line = raw.rstrip("\n")
+            if not line or line.startswith("##"):
+                continue
+            if header is None:
+                if not line.startswith("#"):
+                    raise ValueError(f"eggNOG header beginning with '#query' not found in {path}")
+                header = line.lstrip("#").split("\t")
+                continue
+            values = line.split("\t")
+            row = dict(zip(header, values))
+            query = row.get("query", "").strip()
+            if query:
+                annotations[query] = row
+    if header is None or "query" not in header:
+        raise ValueError(f"eggNOG query column not found in {path}")
+    columns = [(source, _eggnog_output_name(source)) for source in header if source != "query"]
+    return columns, annotations
+
+
+def add_eggnog_columns(
+    annotation_path: str,
+    output_path: str,
+    columns: List[Tuple[str, str]],
+    annotations: Dict[str, Dict[str, str]],
+    status: str,
+) -> None:
+    """Join eggNOG results onto annotation rows through the unique Protein ID."""
+    with open(annotation_path, "rt", encoding="utf-8", newline="") as source, \
+            open(output_path, "wt", encoding="utf-8", newline="") as target:
+        reader = csv.DictReader(source, delimiter="\t")
+        fieldnames = reader.fieldnames or []
+        if "Protein ID" not in fieldnames:
+            raise ValueError(f"Annotation table lacks Protein ID: {annotation_path}")
+        destinations = [destination for _source, destination in columns]
+        writer = csv.DictWriter(
+            target, [*fieldnames, "Eggnog", *destinations, "eggnog_OG"], delimiter="\t"
+        )
+        writer.writeheader()
+        for row in reader:
+            protein_id = (row.get("Protein ID") or "").strip()
+            eggnog = annotations.get(protein_id, {})
+            raw_ogs = next(
+                (
+                    eggnog.get(source_name, "")
+                    for source_name, _destination in columns
+                    if source_name.lstrip("#").lower() == "eggnog_ogs"
+                ),
+                "",
+            )
+            writer.writerow({
+                **row,
+                "Eggnog": status,
+                **{
+                    destination: eggnog.get(source_name, "")
+                    for source_name, destination in columns
+                },
+                "eggnog_OG": eggnog_og_base(raw_ogs),
+            })
+
+
+def run_eggnog_mapper(
+    proteins_path: str,
+    output_dir: str,
+    emapper: str,
+    cpu: int,
+    data_dir: Optional[str],
+    extra_args: Tuple[str, ...],
+) -> str:
+    executable = shutil.which(emapper) or (emapper if Path(emapper).is_file() else None)
+    if not executable:
+        raise SystemExit(f"eggNOG-mapper executable not found: {emapper}")
+    prefix = "metatracer"
+    command = [
+        str(executable), "-i", proteins_path, "--itype", "proteins",
+        "--output", prefix, "--output_dir", output_dir, "--cpu", str(cpu),
+    ]
+    if data_dir:
+        command += ["--data_dir", data_dir]
+    command += list(extra_args)
+    logging.info("Running eggNOG-mapper on unique deposited proteins")
+    subprocess.run(command, check=True)
+    annotations = Path(output_dir) / f"{prefix}.emapper.annotations"
+    if not annotations.is_file():
+        raise RuntimeError(f"eggNOG-mapper did not create {annotations}")
+    return str(annotations)
+
+
 # ----------------------------
 # Merge chunks + stream annotation
 # ----------------------------
@@ -759,13 +1139,19 @@ def run(
     assignments: str,
     map_table: List[str],
     out: str,
-    proteins_out: str,
     taxa_only: bool = False,
     chunk_size: int = 500_000,
     tmpdir: Optional[str] = None,
     data_dir: Optional[str] = None,
     gff_data_dir: Optional[str] = None,
     protein_data_dir: Optional[str] = None,
+    resource_report: Optional[str] = None,
+    gff_pattern: str = DEFAULT_GFF_PATTERN,
+    protein_pattern: str = DEFAULT_PROTEIN_PATTERN,
+    emapper: str = "emapper.py",
+    eggnog_cpu: int = 1,
+    eggnog_data_dir: Optional[str] = None,
+    emapper_args: Tuple[str, ...] = (),
     fuzzy: int = 0,
     verbose: int = 0,
 ) -> int:
@@ -773,6 +1159,21 @@ def run(
 
     logging.info("Loading mapping table...")
     by_key, by_assembly = load_mapping_tables(map_table)
+
+    if not taxa_only:
+        if not data_dir:
+            raise SystemExit(
+                "--reference-basepath is required for deposited GFF/protein annotation"
+            )
+        resolved_report = resource_report or (out + ".resources.tsv")
+        logging.info("Preparing deposited annotation resources...")
+        by_assembly, resources_ready = prepare_annotation_resources(
+            by_assembly, data_dir, resolved_report, gff_pattern, protein_pattern
+        )
+        if not resources_ready:
+            raise SystemExit(
+                f"One or more annotation resources could not be prepared; see {resolved_report}"
+            )
 
     tmpdir = tmpdir or tempfile.mkdtemp(prefix="annotate_chunks_")
     os.makedirs(tmpdir, exist_ok=True)
@@ -807,7 +1208,7 @@ def run(
                 accession = ""
                 acc_desc = ""
                 if seqid:
-                    m = by_key.get(seqid)
+                    m = by_key.get((taxid, seqid))
                     if m is not None:
                         assembly = m.assembly
                         accession = m.accession
@@ -855,37 +1256,66 @@ def run(
             ]
             if not taxa_only:
                 header += ["CDS ID", "Protein ID", "Annotation"]
+                header += ["Eggnog"]
+                header += [_eggnog_output_name(field) for field in DEFAULT_EGGNOG_FIELDS]
+                header += ["eggnog_OG"]
             w.writerow(header)
-        open(proteins_out, "wt", encoding="utf-8").close()
         return 0
 
     logging.info(
         "Translating %d unique taxids with ete3 (batched)...", len(taxids_seen))
     taxid_to_name = build_taxid_name_map(taxids_seen)
 
-    if taxa_only:
-        # proteins file is irrelevant in taxa-only mode; create empty to keep Snakemake happy
-        open(proteins_out, "wt", encoding="utf-8").close()
-
     resolved_gff_data_dir = gff_data_dir or data_dir
     resolved_protein_data_dir = protein_data_dir or data_dir
 
     logging.info("Pass 2: merging %d chunks -> %s", len(chunk_paths), out)
-    merge_sorted_chunks(
-        chunk_paths=chunk_paths,
-        taxid_to_name=taxid_to_name,
-        out_tsv=out,
-        taxa_only=taxa_only,
-        by_assembly=by_assembly,
-        proteins_fasta_out=proteins_out,
-        fuzzy=fuzzy,
-        gff_data_dir=resolved_gff_data_dir,
-        protein_data_dir=resolved_protein_data_dir,
-    )
+    with tempfile.TemporaryDirectory(prefix="metatracer_eggnog_") as eggnog_work:
+        proteins_path = os.path.join(eggnog_work, "unique_proteins.faa")
+        annotation_path = os.path.join(eggnog_work, "deposited_annotations.tsv")
+        merge_sorted_chunks(
+            chunk_paths=chunk_paths,
+            taxid_to_name=taxid_to_name,
+            out_tsv=(out if taxa_only else annotation_path),
+            taxa_only=taxa_only,
+            by_assembly=by_assembly,
+            proteins_fasta_out=proteins_path,
+            fuzzy=fuzzy,
+            gff_data_dir=resolved_gff_data_dir,
+            protein_data_dir=resolved_protein_data_dir,
+        )
+        if not taxa_only:
+            if os.path.getsize(proteins_path) == 0:
+                columns = [
+                    (field, _eggnog_output_name(field)) for field in DEFAULT_EGGNOG_FIELDS
+                ]
+                annotations: Dict[str, Dict[str, str]] = {}
+                eggnog_status = "NOT_RUN_NO_PROTEIN"
+            else:
+                try:
+                    eggnog_path = run_eggnog_mapper(
+                        proteins_path, eggnog_work, emapper, eggnog_cpu,
+                        eggnog_data_dir, emapper_args,
+                    )
+                    columns, annotations = read_eggnog_annotations(eggnog_path)
+                    eggnog_status = "SUCCESS"
+                except (Exception, SystemExit) as exc:
+                    logging.warning(
+                        "EGGNOG ANNOTATION FAILED; deposited annotations will be retained "
+                        "with Eggnog=FAILED: %s", exc,
+                    )
+                    columns = [
+                        (field, _eggnog_output_name(field))
+                        for field in DEFAULT_EGGNOG_FIELDS
+                    ]
+                    annotations = {}
+                    eggnog_status = "FAILED"
+            add_eggnog_columns(
+                annotation_path, out, columns, annotations, eggnog_status
+            )
 
     logging.info("Done.")
     logging.info("Output TSV: %s", out)
-    logging.info("Proteins FASTA: %s", proteins_out)
     logging.info("Temp chunks: %s", tmpdir)
     return 0
 
@@ -899,19 +1329,31 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--map-table",
         required=True,
         nargs="+",
-        help="One or more TSV/CSV mapping tables: seqid, assembly, taxid, header, description, gff, protein_fasta.",
+        help="One or more reference-build manifests, combined using taxid and seqid.",
     )
     p.add_argument("-o", "--out", required=True, help="Output TSV path.")
-    p.add_argument("--proteins-out", required=True,
-                   help="Output FASTA path for unique proteins (by sequence).")
     p.add_argument("--taxa-only", action="store_true",
                    help="Only output taxa/position/edit columns (no GFF/protein lookups).")
     p.add_argument("--chunk-size", type=int, default=500_000,
                    help="Max hits per chunk before sorting to disk.")
     p.add_argument("--tmpdir", default=None,
                    help="Temp directory for chunk files (default: system temp).")
-    p.add_argument("--data-dir", default=None,
-                   help="Optional fallback base directory for both GFF and protein FASTA lookup when table paths are missing.")
+    p.add_argument("--reference-basepath", "--data-dir", dest="data_dir", default=None,
+                   help="Base directory containing the NCBI Datasets ncbi_dataset/data tree.")
+    p.add_argument("--resource-report", default=None,
+                   help="Resource preparation report (default: <out>.resources.tsv).")
+    p.add_argument("--gff-pattern", default=DEFAULT_GFF_PATTERN,
+                   help="GFF glob template using {basepath}, {accession}, and/or {assembly}.")
+    p.add_argument("--protein-pattern", default=DEFAULT_PROTEIN_PATTERN,
+                   help="Protein FASTA glob template using {basepath}, {accession}, and/or {assembly}.")
+    p.add_argument("--emapper", default="emapper.py",
+                   help="eggNOG-mapper executable.")
+    p.add_argument("--eggnog-cpu", type=int, default=1,
+                   help="CPUs passed to eggNOG-mapper.")
+    p.add_argument("--eggnog-data-dir", default=None,
+                   help="Optional eggNOG-mapper database directory.")
+    p.add_argument("--emapper-arg", action="append", default=[],
+                   help="Additional eggNOG-mapper argument; repeat as needed.")
     p.add_argument("--gff-data-dir", default=None,
                    help="Optional fallback base directory to resolve missing GFF paths as <gff-data-dir>/<assembly>/genomic.gff(.gz).")
     p.add_argument("--protein-data-dir", default=None,
@@ -925,13 +1367,19 @@ def main(argv: Optional[List[str]] = None) -> int:
         assignments=args.assignments,
         map_table=args.map_table,
         out=args.out,
-        proteins_out=args.proteins_out,
         taxa_only=args.taxa_only,
         chunk_size=args.chunk_size,
         tmpdir=args.tmpdir,
         data_dir=args.data_dir,
         gff_data_dir=args.gff_data_dir,
         protein_data_dir=args.protein_data_dir,
+        resource_report=args.resource_report,
+        gff_pattern=args.gff_pattern,
+        protein_pattern=args.protein_pattern,
+        emapper=args.emapper,
+        eggnog_cpu=args.eggnog_cpu,
+        eggnog_data_dir=args.eggnog_data_dir,
+        emapper_args=tuple(args.emapper_arg),
         fuzzy=args.fuzzy,
         verbose=args.verbose,
     )

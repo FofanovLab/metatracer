@@ -4,6 +4,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 from collections import OrderedDict
+from pathlib import Path
 from typing import Dict, List, Optional
 
 import click
@@ -90,7 +91,7 @@ RUST_BINARIES: Dict[str, str] = {
 
 COMMAND_GROUPS = [
     ("Build Reference Index", ["reference-build", "index-build"]),
-    ("Assignment", ["assign", "merge", "filter", "taxa-report-filter", "annotate"]),
+    ("Assignment", ["assign", "merge", "filter", "taxa-report-filter", "annotate", "count"]),
     ("Utility", ["extract-reads"]),
 ]
 
@@ -391,6 +392,8 @@ def extract_reads_cmd(
 @click.option("--out-dir", required=True, help="Output directory for per-index FASTA path lists.")
 @click.option("--max-size-mb", type=int, default=10000, show_default=True,
               help="Target maximum logical FASTA size assigned to each index in MB.")
+@click.option("--seqid-build-token", type=click.IntRange(100, 999), default=None,
+              help="Three-digit token for a single-index build (default: a new token per index).")
 @click.option("--mapping-only", is_flag=True, hidden=True,
               help="Deprecated compatibility option; manifests are always written without concatenating FASTAs.")
 @click.option("--map-out", default=None, help="Output full sequence manifest TSV path.")
@@ -411,6 +414,7 @@ def reference_build(
     report: str,
     out_dir: str,
     max_size_mb: int,
+    seqid_build_token: Optional[int],
     mapping_only: bool,
     map_out: Optional[str],
     summary_out: Optional[str],
@@ -436,6 +440,8 @@ def reference_build(
         argv += ["--summary-out", summary_out]
     if taxonomy_map_out:
         argv += ["--taxonomy-map-out", taxonomy_map_out]
+    if seqid_build_token is not None:
+        argv += ["--seqid-build-token", str(seqid_build_token)]
     argv += ["--taxonomy-source", taxonomy_source]
     if mapping_only:
         argv.append("--mapping-only")
@@ -582,14 +588,12 @@ def taxa_report_filter_cmd(
     "--map-table",
     required=True,
     multiple=True,
-    help="Mapping table(s) TSV/CSV: seqid, assembly, taxid, header, description, gff, protein_fasta.",
+    help=(
+        "Reference-build sequence manifest; repeat for indices built at different times. "
+        "Rows are combined using taxid and seqid."
+    ),
 )
 @click.option("-o", "--out", required=True, help="Output TSV path.")
-@click.option(
-    "--proteins-out",
-    required=True,
-    help="Output FASTA path for unique proteins (by sequence).",
-)
 @click.option(
     "--taxa-only",
     is_flag=True,
@@ -608,10 +612,35 @@ def taxa_report_filter_cmd(
     help="Temp directory for chunk files (default: system temp).",
 )
 @click.option(
-    "--data-dir",
+    "--reference-basepath", "--data-dir", "data_dir",
     default=None,
-    help="Optional fallback base directory for both GFF and protein FASTA lookup.",
+    help="Base directory containing the NCBI Datasets ncbi_dataset/data tree.",
 )
+@click.option(
+    "--resource-report",
+    default=None,
+    help="Resource preparation report (default: <out>.resources.tsv).",
+)
+@click.option(
+    "--gff-pattern",
+    default="{basepath}/ncbi_dataset/data/{accession}/*_genomic.gff*",
+    show_default=True,
+    help="GFF glob template using {basepath}, {accession}, and/or {assembly}.",
+)
+@click.option(
+    "--protein-pattern",
+    default="{basepath}/ncbi_dataset/data/{accession}/*_protein.faa*",
+    show_default=True,
+    help="Protein FASTA glob template using {basepath}, {accession}, and/or {assembly}.",
+)
+@click.option("--emapper", default="emapper.py", show_default=True,
+              help="eggNOG-mapper executable.")
+@click.option("--eggnog-cpu", type=click.IntRange(min=1), default=1,
+              show_default=True, help="CPUs passed to eggNOG-mapper.")
+@click.option("--eggnog-data-dir", default=None,
+              help="Optional eggNOG-mapper database directory.")
+@click.option("--emapper-arg", "emapper_args", multiple=True,
+              help="Additional eggNOG-mapper argument; repeat as needed.")
 @click.option(
     "--gff-data-dir",
     default=None,
@@ -634,13 +663,19 @@ def annotate_cmd(
     assignments: str,
     map_table: tuple[str, ...],
     out: str,
-    proteins_out: str,
     taxa_only: bool,
     chunk_size: int,
     tmpdir: Optional[str],
     data_dir: Optional[str],
     gff_data_dir: Optional[str],
     protein_data_dir: Optional[str],
+    resource_report: Optional[str],
+    gff_pattern: str,
+    protein_pattern: str,
+    emapper: str,
+    eggnog_cpu: int,
+    eggnog_data_dir: Optional[str],
+    emapper_args: tuple[str, ...],
     fuzzy: int,
     verbose: int,
 ) -> None:
@@ -653,17 +688,63 @@ def annotate_cmd(
         assignments=assignments,
         map_table=list(map_table),
         out=out,
-        proteins_out=proteins_out,
         taxa_only=taxa_only,
         chunk_size=chunk_size,
         tmpdir=tmpdir,
         data_dir=data_dir,
         gff_data_dir=gff_data_dir,
         protein_data_dir=protein_data_dir,
+        resource_report=resource_report,
+        gff_pattern=gff_pattern,
+        protein_pattern=protein_pattern,
+        emapper=emapper,
+        eggnog_cpu=eggnog_cpu,
+        eggnog_data_dir=eggnog_data_dir,
+        emapper_args=emapper_args,
         fuzzy=fuzzy,
         verbose=verbose,
     )
     raise SystemExit(int(rc))
+
+
+@cli.command(name="count")
+@click.option(
+    "--input", "input_paths", multiple=True, required=True,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="Final annotation TSV/CSV; repeat for multiple files.",
+)
+@click.option(
+    "--output", "output_path", required=True,
+    type=click.Path(dir_okay=False, path_type=Path),
+)
+@click.option(
+    "--column", "columns", multiple=True, required=True,
+    help=(
+        "Column to count; repeat to count joint combinations. Reads with a blank "
+        "value in any requested column are not counted."
+    ),
+)
+@click.option(
+    "--tmpdir", default=None, type=click.Path(file_okay=False, path_type=Path),
+    help="Parent directory for the disk-backed counting database.",
+)
+def count_cmd(
+    input_paths: tuple[Path, ...], output_path: Path,
+    columns: tuple[str, ...], tmpdir: Optional[Path],
+) -> None:
+    """Count unique per-read assignments for selected annotation columns."""
+    from . import count as mod
+
+    try:
+        result = mod.run(list(input_paths), output_path, list(columns), tmpdir)
+    except (OSError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(
+        "input_rows={input_rows} unique_values={unique_values} "
+        "skipped_reads={skipped_reads} count_rows={count_rows} output={}".format(
+            output_path, **result
+        )
+    )
 
 
 def main() -> None:
