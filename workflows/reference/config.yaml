@@ -1,0 +1,19 @@
+# Authoritative user table. Required columns: accession and taxid. Optional
+# columns: alternate_taxid and index. IDs are used exactly as supplied.
+accession_table: "tests/pipeline_toy/reference_accessions.tsv"
+
+output_dir: "tests/pipeline_toy/work/reference"
+resource_dir: "tests/pipeline_toy/work"
+log_dir: "tests/pipeline_toy/work/reference/logs"
+
+# Existing-annotation route: "genome,gff3,protein"
+# De novo-only route: "genome" (saves download time and disk space)
+datasets_include: "genome,gff3,protein"
+
+# Ignored when the report contains an explicit index column.
+max_index_size_mb: 1000
+
+bwt_occ_sample_rate: 64
+sa_sample_rate: 32
+index_threads: 4
+skip_missing: false

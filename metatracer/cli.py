@@ -376,14 +376,24 @@ def extract_reads_cmd(
 
 @cli.command(name="reference-build")
 @click.option("--data-dir", required=True, help="Base dir containing assembly subdirs (GCF_*/).")
-@click.option("--report", required=True, help="Datasets report mapping assembly -> taxid.")
-@click.option("--out-dir", required=True, help="Output directory for chunks + mapping + summary.")
-@click.option("--max-size-mb", type=int, default=10000, show_default=True, help="Max size per chunk FASTA in MB.")
-@click.option("--mapping-only", is_flag=True, help="Skip FASTA chunk generation and regenerate mapping + summary only.")
-@click.option("--map-out", default=None, help="Output mapping TSV path.")
+@click.option("--accession-table", "report", required=True,
+              help="User table with accession, taxid, optional alternate_taxid, and optional index.")
+@click.option("--out-dir", required=True, help="Output directory for per-index FASTA path lists.")
+@click.option("--max-size-mb", type=int, default=10000, show_default=True,
+              help="Target maximum logical FASTA size assigned to each index in MB.")
+@click.option("--mapping-only", is_flag=True, hidden=True,
+              help="Deprecated compatibility option; manifests are always written without concatenating FASTAs.")
+@click.option("--map-out", default=None, help="Output full sequence manifest TSV path.")
 @click.option("--summary-out", default=None, help="Output summary path.")
-@click.option("--index-gff", is_flag=True, help="bgzip+tabix index GFFs as discovered.")
-@click.option("--force-reindex", is_flag=True, help="Recreate .tbi/.gz even if present.")
+@click.option("--taxonomy-map-out", default=None, help="Output assembly taxonomy audit TSV path.")
+@click.option(
+    "--taxonomy-source",
+    type=click.Choice(["provided", "ncbi", "gtdb", "ncbi_then_gtdb"]),
+    default="provided",
+    show_default=True,
+    help="Taxonomy policy. 'provided' uses table IDs directly; legacy policies transform NCBI/GTDB metadata.",
+    hidden=True,
+)
 @click.option("--log", default=None, help="Optional log file.")
 @click.option("--verbose", is_flag=True, help="Debug logging.")
 def reference_build(
@@ -394,19 +404,19 @@ def reference_build(
     mapping_only: bool,
     map_out: Optional[str],
     summary_out: Optional[str],
-    index_gff: bool,
-    force_reindex: bool,
+    taxonomy_map_out: Optional[str],
+    taxonomy_source: str,
     log: Optional[str],
     verbose: bool,
 ) -> None:
     """
-    Chunk/reformat Datasets genomes + write mapping tables.
+    Scan Datasets genomes and plan source FASTAs into indices.
     """
     from . import reference_build as mod
 
     argv: List[str] = [
         "--data-dir", data_dir,
-        "--report", report,
+        "--accession-table", report,
         "--out-dir", out_dir,
         "--max-size-mb", str(max_size_mb),
     ]
@@ -414,12 +424,11 @@ def reference_build(
         argv += ["--map-out", map_out]
     if summary_out:
         argv += ["--summary-out", summary_out]
+    if taxonomy_map_out:
+        argv += ["--taxonomy-map-out", taxonomy_map_out]
+    argv += ["--taxonomy-source", taxonomy_source]
     if mapping_only:
         argv.append("--mapping-only")
-    if index_gff:
-        argv.append("--index-gff")
-    if force_reindex:
-        argv.append("--force-reindex")
     if log:
         argv += ["--log", log]
     if verbose:
