@@ -84,61 +84,79 @@ references/ncbi_dataset/data/GCF_XXXXXXX.Y/
 ---
 
 ### 1.2 Run `metatracer reference-build`
-The reference build pulls all references provided from the genome report, reformats the headers, and concatenates them
-into chunks ready for index building. The size of the chunks will play a role in how much memory is required to load each index so consider resources when setting the chunk size. The final index will be ~3.5x the size of the chunked fasta file and will require proportional memory to load during assignment.
+
+The reference build scans downloaded genome FASTAs and plans them into
+size-bounded indices. It does not copy, concatenate, split, or rewrite the FASTA
+files. Each source FASTA remains intact and is listed in exactly one index plan.
+A source FASTA larger than the configured target is assigned to an index by
+itself.
 
 `metatracer reference-build` takes:
 
-* the **base directory containing all GCF subdirectories** 
-* the **genome report** (assembly ↔ taxid mapping)
+* the base directory containing the assembly subdirectories
+* an accession table containing `accession` and `taxid`
 * and produces:
 
-  * chunked FASTA files for indexing (headers rewritten to `>{accession_key}-{taxid}`)
-  * a mapping TSV required for downstream annotation
-  * a summary report (assemblies processed, taxa counts, taxonomic level per rolled taxid)
-  * (optional) bgzip + tabix indexing for GFF files (indexed GFF files are required at annotation step)
+  * one FASTA path list per planned index
+  * a sequence manifest used for indexing and downstream annotation
+  * a taxonomy audit table
+  * a reference-build summary
 
-During `reference-build`, taxids from the genome report are rolled up to the **species** rank when available, or to the nearest higher rank (`genus`, `family`, `order`, `class`, `phylum`, `superkingdom`) when species is not available. This rollup uses `ete3`. 
-Example:
+The accession table may also contain `alternate_taxid` and `index`. An empty or
+missing `alternate_taxid` defaults to `taxid`. If `index` is present, every row
+must have a non-negative integer index assignment and `--max-size-mb` is
+ignored. Otherwise, whole FASTA files are assigned sequentially until the
+configured size target is reached.
+
+Example accession table:
+
+```tsv
+accession	taxid	alternate_taxid
+GCF_000005845.2	562	561
+GCF_000009045.1	1423	1386
+```
+
+Build the reference plan:
 
 ```bash
 metatracer reference-build \
-  --data-dir bacteria.datasets/ncbi_dataset/data \
-  --report bacteria.datasets/assembly_data_report.jsonl \
+  --data-dir references/ncbi_dataset/data \
+  --accession-table reference_accessions.tsv \
   --out-dir metatracer_ref/ \
   --summary-out metatracer_ref/metatracer_reference.summary.txt \
-  --map_out metatracer_ref/metatracer_reference.map.tsv \
-  --max-size-mb 10000 \
-  --index-gff
+  --map-out metatracer_ref/metatracer_reference.map.tsv \
+  --taxonomy-map-out metatracer_ref/metatracer_reference.taxonomy.tsv \
+  --max-size-mb 10000
 ```
 
 Outputs:
 
-* `metatracer_ref/metatracer_reference.chunk.0.fasta`, `.1.fasta`, ...
+* `metatracer_ref/metatracer_reference.index.0.fasta-list.txt`, `.1.fasta-list.txt`, ...
 * `metatracer_ref/metatracer_reference.map.tsv`
+* `metatracer_ref/metatracer_reference.taxonomy.tsv`
 * `metatracer_ref/metatracer_reference.summary.txt`
 
-Summary taxid section format:
-
-* `taxid`
-* `rank` (the rolled level used for that taxid)
-* `assemblies` (count of assemblies mapped to that rolled taxid)
-
-The mapping TSV includes:
+The sequence manifest includes:
 
 * `seqid` (unique integer used in MG-index)
 * `assembly` (assembly accession, e.g. `GCF_...`)
 * `taxid`
+* `alternate_taxid`
+* `index`
+* `fasta_path`
 * `header` (contig accession from the original FASTA header, e.g. `NC_...`)
 * `description` (original FASTA header)
-* `gff` (bgzipped + tabix-indexed path if `--index-gff` is used)
-* `protein_fasta` (path to protein FASTA)
+
+The supplied taxonomy IDs are used directly; `reference-build` does not infer
+their taxonomy source or automatically roll them to another rank. Both ID
+columns must fit in an unsigned 32-bit integer.
 
 ---
 
 ### 1.3 Run `metatracer index-build`
 
-`metatracer index-build` consumes each FASTA file and builds an MG-index.
+`metatracer index-build` consumes each FASTA path list and the shared sequence
+manifest to build an MG-index.
 
 #### Benchmark for ~10 GB FASTA chunks
 
@@ -150,9 +168,12 @@ The mapping TSV includes:
 Example:
 
 ```bash
-for i in {0..10}; do
+for list in metatracer_ref/*.fasta-list.txt; do
+  i=${list##*.index.}
+  i=${i%%.*}
   metatracer index-build \
-    --fasta metatracer_ref/metatracer_reference.chunk.${i}.fasta \
+    --fasta-list "$list" \
+    --mapping metatracer_ref/metatracer_reference.map.tsv \
     --index metatracer_index/metatracer.chunk.${i}.index
 done
 ```
@@ -160,10 +181,16 @@ done
 Outputs:
 
 * MG-index files in `metatracer_index/` suitable for read binning.
-**Note:** New indices can be build at any time without needing to rebuild existing indices. Multiple mapping files need to be maintained for each build and passed during annotation.
+
+**Note:** New indices can be built without rebuilding existing indices. Retain
+the mapping file associated with each reference build for annotation.
 
 ### Clean-up
-Once the build is complete, the original `*genomic.fna` files can be removed as well as the chunked fasta files. The gff, and protein files should be maintained for annotation.
+
+The original genome FASTAs must remain available until all planned indices have
+been built because the path lists point to those files. After index construction
+has completed and the indices have been verified, the source FASTAs may be
+removed. Retain GFF and protein files when using deposited annotations.
 
 ---
 
