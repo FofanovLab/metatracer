@@ -16,57 +16,63 @@ Preprint: [MetaTracer bioRxiv manuscript](https://www.biorxiv.org/content/10.648
 
 ### 1.1 Download references with NCBI Datasets
 
-MetaTracer assumes references are downloaded using the [**NCBI Datasets CLI**](https://www.ncbi.nlm.nih.gov/datasets/).
+MetaTracer uses the [**NCBI Datasets CLI**](https://www.ncbi.nlm.nih.gov/datasets/).
+Start with a plain-text file containing one versioned NCBI assembly accession
+per line:
+
+```text
+GCF_000005845.2
+GCF_000009045.1
 ```
-conda install -c conda-forge ncbi-datasets-cli
+
+Create a dehydrated package containing genome FASTAs, GFF3 annotations, and
+protein sequences:
+
+```bash
+datasets download genome accession \
+  --inputfile accessions.txt \
+  --include genome,gff3,protein \
+  --dehydrated \
+  --filename references.zip \
+  --no-progressbar
 ```
-Downloaded assemblies should be **annotated** and include:
+
+Extract and rehydrate it:
+
+```bash
+mkdir -p references
+unzip -q references.zip -d references
+datasets rehydrate --directory references --no-progressbar
+```
+
+The resulting assembly directories contain:
 
 - `*genomic.fna` (reference genome sequences)
 - `*genomic.gff` / `*genomic.gff.gz` (GFF3 annotations)
 - `*protein.faa` (protein sequences)
 
-**Important:** you must also include a **Datasets report** that maps **assembly accession → taxid** (the “genome report”). This report is used later to build mapping tables and for downstream annotation.
-
-You can request the report either:
-- as JSON lines (recommended for reproducibility / structured parsing), or
-- as TSV (easier to inspect manually)
-
-#### Example: get all bacteria (TaxID 2), RefSeq-only, latest assemblies
+The same process is automated by the
+[genome-download Snakefile](metatracer/genome_download/Snakefile). Set
+`accession_file` in `metatracer/genome_download/config.yaml`, then run:
 
 ```bash
-datasets download genome taxon 2 \
-  --assembly-level complete \
-  --annotated \
-  --exclude-atypical \
-  --assembly-version latest \
-  --assembly-source RefSeq \
-  --mag exclude \
-  --include genome,gff3,protein \
-  --report genome \
-  --as-json-lines \
-  --filename bacteria.datasets.zip
+cd metatracer/genome_download
+snakemake --use-conda --cores 8
 ```
 
-Unpack:
-
-```bash
-unzip -q bacteria.datasets.zip -d bacteria.datasets/
-```
+In addition to the rehydrated package, the workflow writes
+`downloads/accession_taxid.tsv`. It rolls organism TaxIDs up to species (or the
+nearest higher canonical rank) and uses the `accession` and `taxid` columns
+expected by `metatracer reference-build --report`.
 
 After unpacking, you should have a directory containing assembly subdirectories such as:
 
 ```text
-bacteria.datasets/.../GCF_XXXXXXX.Y/
+references/ncbi_dataset/data/GCF_XXXXXXX.Y/
   *_genomic.fna
   *_genomic.gff[.gz]
   *_protein.faa
 ```
-
-You should also have the genome report (TSV or JSONL), which provides:
-
-* `assembly_accession` (e.g., `GCF_000006625.1`)
-* `tax_id` (NCBI taxid)
 
 ---
 
