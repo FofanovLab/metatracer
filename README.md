@@ -17,246 +17,6 @@ Preprint: [MetaTracer bioRxiv manuscript](https://www.biorxiv.org/content/10.648
 
 ---
 
-## Command-line reference
-
-The following reflects the current public CLI. Run `metatracer COMMAND --help`
-in the installed environment to display the same information.
-
-<details>
-<summary><code>metatracer reference-build --help</code></summary>
-
-```text
-Usage: metatracer reference-build [OPTIONS]
-
-  Scan Datasets genomes and plan source FASTAs into indices.
-
-Options:
-  --data-dir TEXT                 Base directory containing assembly
-                                  subdirectories (GCF_*). [required]
-  --accession-table TEXT          Table with accession, taxid, optional
-                                  alternate_taxid, and optional index. [required]
-  --out-dir TEXT                  Output directory for per-index FASTA lists.
-                                  [required]
-  --max-size-mb INTEGER           Target maximum FASTA size per index in MB.
-                                  [default: 10000]
-  --seqid-build-token INTEGER     Three-digit token for a single-index build;
-                                  default is a new token per index. [100-999]
-  --map-out TEXT                  Output sequence-manifest TSV.
-  --summary-out TEXT              Output summary path.
-  --taxonomy-map-out TEXT         Output assembly-taxonomy audit TSV.
-  --log TEXT                      Optional log file.
-  --verbose                       Enable debug logging.
-  -h, --help                      Show this message and exit.
-```
-
-</details>
-
-<details>
-<summary><code>metatracer index-build --help</code></summary>
-
-```text
-Usage: metatracer index-build [OPTIONS]
-
-  Build an MG-index from one or more reference FASTAs.
-
-Options:
-  -f, --fasta TEXT               FASTA database file; repeat for multiple files.
-  --fasta-list TEXT              File containing one FASTA path per line.
-  -i, --index TEXT               Output MG-index path. [required]
-  --mapping TEXT                 Header mapping with header, taxid,
-                                 alternate_taxid, and seqid columns.
-  --bwt-occ-sample-rate INTEGER  FM-index occurrence-table sampling interval.
-                                 [default: 64]
-  --sa-sample-rate INTEGER       Suffix-array sampling interval. [default: 32]
-  --skip-missing                 Warn and skip FASTA records absent from mapping.
-  -v, --verbose                  Enable debug logging.
-  -h, --help                     Show this message and exit.
-```
-
-</details>
-
-<details>
-<summary><code>metatracer assign --help</code></summary>
-
-```text
-Usage: metatracer assign [OPTIONS]
-
-  Assign reads to reference sequences.
-
-Options:
-  --fasta TEXT               Input FASTA reads.
-  --fastq TEXT               Input FASTQ reads.
-  --index TEXT               Input MG-index. [required]
-  -m, --results TEXT         Assignment output path. [required]
-  --max-assignments INTEGER  Stop after this many successful assignments/read.
-  --max-candidates INTEGER   Stop after checking this many candidates/read.
-  --max-hits INTEGER         Skip seeds with more than this many hits.
-                             [default: 2000]
-  --tune-max-hits INTEGER    Increase seed interval above this hit threshold.
-                             [default: 200]
-  --seed-size INTEGER        Seed size. [default: 18]
-  --min-seed FLOAT           Minimum seed percentage required for alignment.
-                             [default: 0.015]
-  --seed-interval INTEGER    Initial exact-match seed interval. [default: 15]
-  -e, --edit-rate FLOAT      Maximum edit proportion. [default: 0.13]
-  -t, --threads INTEGER      Worker threads. [default: 4]
-  --read-offset INTEGER      Skip this many reads. [default: 0]
-  --force-overwrite          Replace output instead of resuming it.
-  -v, --verbose              Enable debug logging.
-  -h, --help                 Show this message and exit.
-```
-
-</details>
-
-<details>
-<summary><code>metatracer merge --help</code></summary>
-
-```text
-Usage: metatracer merge [OPTIONS] [INPUTS]...
-
-  Merge assignment outputs across indices and/or read pairs.
-
-Options:
-  -o, --output TEXT        Combined output path. [required]
-  --report TEXT            Write a per-TaxID statistics TSV.
-  -t, --threads INTEGER    Sorting threads. [default: 4]
-  -v, --verbose            Enable debug logging.
-  -h, --help               Show this message and exit.
-```
-
-</details>
-
-<details>
-<summary><code>metatracer filter --help</code></summary>
-
-```text
-Usage: metatracer filter [OPTIONS]
-
-  Filter assignments by taxa and edit distance.
-
-Options:
-  --input TEXT                 Input assignments file. [required]
-  --out TEXT                   Filtered output file. [required]
-  --include-taxa TEXT          File containing TaxIDs to retain.
-  --exclude-taxa TEXT          File containing TaxIDs to remove.
-  --edit-delta INTEGER         Keep hits with edit <= minimum + delta.
-                               [default: 0]
-  --max-edit-distance INTEGER  Remove hits above this edit distance first.
-  --log TEXT                   Log file; default is standard error.
-  --verbose                    Enable debug logging.
-  -h, --help                   Show this message and exit.
-```
-
-</details>
-
-<details>
-<summary><code>metatracer taxa-report-filter --help</code></summary>
-
-```text
-Usage: metatracer taxa-report-filter [OPTIONS]
-
-  Apply minimum cutoffs to a taxa summary and emit TaxID lists.
-
-Options:
-  --input TEXT                       Input taxa report (TSV/CSV). [required]
-  --out TEXT                         Filtered report. [required]
-  --include-out TEXT                 Passing TaxIDs, one per line. [required]
-  --exclude-out TEXT                 Failing TaxIDs, one per line. [required]
-  --log TEXT                         Parameter and summary log. [required]
-  --min-only-hit FLOAT               Minimum only_hit.
-  --min-only-hit-pct FLOAT           Minimum only_hit_pct.
-  --min-only-best FLOAT              Minimum only_best.
-  --min-only-best-pct FLOAT          Minimum only_best_pct.
-  --min-tied-best FLOAT              Minimum tied_best.
-  --min-tied-best-pct FLOAT          Minimum tied_best_pct.
-  --min-not-best FLOAT               Minimum not_best.
-  --min-not-best-pct FLOAT           Minimum not_best_pct.
-  --min-total-reads FLOAT            Minimum total_reads.
-  --min-total-pct FLOAT              Minimum total_pct.
-  --min-strong-support-fraction FLOAT
-                                      Minimum (only_hit + only_best)/total_reads.
-  --min-strong-count FLOAT           Minimum only_hit + only_best.
-  --min-strong-vs-weak-ratio FLOAT   Minimum strong/weak support ratio.
-  -h, --help                         Show this message and exit.
-```
-
-</details>
-
-<details>
-<summary><code>metatracer annotate --help</code></summary>
-
-```text
-Usage: metatracer annotate [OPTIONS] ASSIGNMENTS
-
-  Add taxonomy and CDS/protein annotations.
-
-Options:
-  --map-table TEXT                Reference-build sequence manifest; repeat for
-                                  indices built at different times. [required]
-  -o, --out TEXT                  Output TSV. [required]
-  --taxa-only                     Omit GFF, protein, and eggNOG lookups.
-  --chunk-size INTEGER            Hits sorted per disk chunk. [default: 500000]
-  --tmpdir TEXT                   Temporary chunk directory.
-  --reference-basepath, --data-dir TEXT
-                                  Genome-download directory containing GFF and
-                                  protein FASTA resources.
-  --resource-report TEXT          Resource report; default: <out>.resources.tsv.
-  --gff-pattern TEXT              GFF glob using {basepath}, {accession}, and/or
-                                  {assembly}.
-  --protein-pattern TEXT          Protein-FASTA glob using the same placeholders.
-  --emapper TEXT                  eggNOG-mapper executable. [default: emapper.py]
-  --eggnog-cpu INTEGER            CPUs for eggNOG-mapper. [default: 1]
-  --eggnog-data-dir TEXT          eggNOG-mapper database directory.
-  --emapper-arg TEXT              Additional eggNOG argument; repeat as needed.
-  --gff-data-dir TEXT             Optional fallback GFF directory.
-  --protein-data-dir TEXT         Optional fallback protein FASTA directory.
-  --fuzzy INTEGER                 +/- bp CDS lookup window. [default: 0]
-  -v, --verbose                   Increase verbosity.
-  -h, --help                      Show this message and exit.
-```
-
-</details>
-
-<details>
-<summary><code>metatracer count --help</code></summary>
-
-```text
-Usage: metatracer count [OPTIONS]
-
-  Count unique per-read assignments for selected annotation columns.
-
-Options:
-  --input FILE        Annotation TSV/CSV; repeat for multiple files. [required]
-  --output FILE       Count-table output. [required]
-  --column TEXT       Column to count; repeat for joint combinations. Reads
-                      blank in any requested column are omitted. [required]
-  --tmpdir DIRECTORY  Parent directory for the disk-backed counting database.
-  -h, --help          Show this message and exit.
-```
-
-</details>
-
-<details>
-<summary><code>metatracer extract-reads --help</code></summary>
-
-```text
-Usage: metatracer extract-reads [OPTIONS]
-
-  Partition reads according to assignment results.
-
-Options:
-  --fasta TEXT        Input FASTA reads.
-  --fastq TEXT        Input FASTQ reads.
-  --assignments TEXT  Assignment file; repeat for multiple files. [required]
-  --matched TEXT      Output for assigned reads. [required]
-  --unmatched TEXT    Output for unassigned reads. [required]
-  -h, --help          Show this message and exit.
-```
-
-</details>
-
----
-
 ## Installation
 
 > **Platform support:** Currently supports Linux only; the bundled SSW
@@ -402,15 +162,6 @@ size-bounded indices.
   * a taxonomy audit table
   * a reference-build summary
 
-The accession table may also contain `alternate_taxid` and `index`. An empty or
-missing `alternate_taxid` defaults to `taxid`. The `alternate_taxid` allows a different
-taxonomic scheme to be stored for each reference.
-The `index` column is provided to allow users to overide the default behavior and manually assign each sequence to an index.
-If `index` is present, every row
-must have a non-negative integer index assignment and `--max-size-mb` is
-ignored. Otherwise, whole FASTA files are assigned sequentially until the
-configured size target is reached.
-
 Example accession table:
 
 ```tsv
@@ -439,50 +190,11 @@ Outputs:
 * `metatracer_ref/metatracer_reference.taxonomy.tsv`
 * `metatracer_ref/metatracer_reference.summary.txt`
 
-The sequence manifest includes:
-
-* `seqid` (build- and index-qualified integer used in MG-index)
-* `assembly` (assembly accession, e.g. `GCF_...`)
-* `taxid`
-* `alternate_taxid`
-* `index`
-* `fasta_path`
-* `header` (contig accession from the original FASTA header, e.g. `NC_...`)
-* `description` (original FASTA header)
-
-Sequence IDs are encoded as:
-
-```text
-(index × 10,000,000) + (three-digit build token × 10,000) + sequence ordinal
-```
-
-Each index receives a different three-digit build token generated from the
-reference-build time plus random entropy. The sequence ordinal starts at one
-within that index. For example, index `10`, build token `123`, and ordinal `42`
-produce seqid `101230042`.
-
 **Use a new build token every time an index is created or rebuilt. Reusing the
 same token with the same index number can reproduce existing sequence IDs and
 cause ambiguous annotations when those indices are used together.** Automatic
-token generation is recommended: MetaTracer creates a distinct token for every
-index planned in a reference-build run and records each index/token pairing in
-the summary.
-
-For a reproducible or administratively assigned token on a build that produces
-exactly one index, pass `--seqid-build-token 123`. Choose a token that has not
-previously been used with that index number. MetaTracer rejects a manual token
-when a reference build produces multiple indices, because each index must have
-its own token.
-
-This layout keeps IDs within the unsigned 32-bit range while greatly reducing
-collisions when manifests from indices created at different times are used
-together. It supports index numbers `0–428` and up to `9,999` sequences per
-index; reference generation stops with a clear error if either limit is
-exceeded.
-
-The supplied taxonomy IDs are used directly; `reference-build` does not infer
-their taxonomy source or automatically roll them to another rank. Both ID
-columns must be representable as signed 32-bit integers (`int32`).
+token generation is recommended. See the command reference for manifest
+fields, optional accession-table columns, and sequence-ID encoding details.
 
 ---
 
@@ -638,11 +350,8 @@ For example, merge can produce:
 read123:562-10-400=1,562-11-300=1
 ```
 
-When `--report` is supplied, merge also writes a headered, per-TaxID TSV with
-the columns `taxid`, `only_hit`, `only_hit_pct`, `only_best`, `only_best_pct`,
-`tied_best`, `tied_best_pct`, `not_best`, `not_best_pct`, `total_reads`, and
-`total_pct`. This report summarizes assignment support and can guide the
-filtering step.
+When `--report` is supplied, merge also writes a per-TaxID support report that
+can guide filtering. Its complete schema is listed in the command reference.
 
 See the [mtsv_tools merge documentation](https://github.com/FofanovLab/mtsv_tools#merge-results-mtsv-collapse)
 for the upstream format definition.
@@ -651,12 +360,6 @@ for the upstream format definition.
 
 ### 2.4 Optional: filter taxa before annotation (`metatracer filter`)
 To reduce runtime, it’s recommended to filter out unlikely taxa before annotating. This includes keeping only hits with the lowest edit distances, and removing taxa that have low overall abundance and support (see merge report).
-
-`metatracer filter` supports:
-
-* include/exclude taxa lists
-* edit distance cutoffs
-* writing a reduced assignments file for annotation
 
 Example:
 
@@ -669,9 +372,6 @@ metatracer filter \
   --edit-delta 1 # Keep hits with edit <= min_edit + edit_delta (default: 0) 
 ```
 
-Notes:
-* `--include-taxa` and `--exclude-taxa` can be used together; include is applied first, then exclude.
-* Both are applied prior to edit distance filtering
 ---
 
 ### 2.5 Annotate filtered assignments (`metatracer annotate`)
@@ -702,30 +402,12 @@ metatracer annotate \
   filter/sample.filtered.assignments.clp
 ```
 
-Repeat `--map-table` for reference indices built at different times. MetaTracer
-loads their rows as one logical concatenated manifest; the input files retain
-their individual header rows and do not need to be manually combined. Hits are
-resolved using the `(taxid, seqid)` pair stored in assignment output, so the
-same `seqid` may be reused when its TaxID differs. If two manifests assign the
-same `(taxid, seqid)` pair to different reference sequences, annotation stops
-with an ambiguity error because that hit cannot be resolved uniquely after
-merge.
-
-Resource discovery uses glob templates. The defaults match the standard
-rehydrated NCBI Datasets layout:
+The default resource patterns match the standard rehydrated NCBI Datasets
+layout:
 
 ```text
 GFF:     {basepath}/ncbi_dataset/data/{accession}/*_genomic.gff*
 Protein: {basepath}/ncbi_dataset/data/{accession}/*_protein.faa*
-```
-
-Use `--gff-pattern` or `--protein-pattern` to support another layout. Patterns
-may contain `{basepath}`, `{accession}`, and `{assembly}` placeholders plus
-standard glob wildcards. For example:
-
-```bash
---gff-pattern '{basepath}/annotations/{accession}/*.gff.gz' \
---protein-pattern '{basepath}/proteins/{accession}/*.faa'
 ```
 
 Each assembly directory must contain exactly one genomic GFF and one protein
@@ -734,21 +416,8 @@ and Tabix-indexed. MetaTracer checks each GFF before annotation and reuses a
 valid prepared file. If necessary, it attempts to sort, BGZF-compress, and
 Tabix-index the GFF automatically in the genome download directory. The
 download directory must therefore be writable when preparation is required.
-Automatically generated sorted and indexed files are stored beside the
-downloaded resources, while the original downloaded GFF is retained.
-
-The resource report contains one row per assembly with these columns:
-
-```tsv
-accession	assembly_path	gff_path	protein_path	gff_sort_status	gff_index_status	status	message
-```
-
-`status` is `READY` when both resources were found and the GFF is usable.
-Missing or ambiguous pattern matches, sorting failures, and indexing failures
-are recorded with a specific failure status and message.
-The complete report is written before annotation stops because of any failed
-assembly. If `--resource-report` is omitted, it defaults to
-`<out>.resources.tsv`.
+See the command reference for custom patterns, multiple manifests, and the
+resource-report schema.
 
 Recommended:
 
@@ -757,26 +426,10 @@ Recommended:
   assembly and sequence identifiers connect assignment hits to the downloaded
   annotation resources.
 
-After deposited CDS annotation, MetaTracer deduplicates the matched protein
-sequences and assigns stable integer `Protein ID` values. The unique protein
-FASTA is passed directly to `emapper.py`; it is an internal intermediate rather
-than a separate requested output. The eggNOG query ID is the same `Protein ID`,
-so eggNOG annotations can be joined back to every corresponding read/CDS row.
-
-All columns returned in the eggNOG `.emapper.annotations` table, other than its
-query column, are appended to `sample.annotated.tsv` with an `eggnog_` prefix.
-MetaTracer also adds `eggnog_OG`, a simplified counting field derived from the
-first value in `eggnog_eggNOG_OGs`. The taxonomic suffix is removed; for
-example, `COG1234@1|root,COG1234@2|Bacteria` becomes `COG1234`.
-Rows without a deposited protein or an eggNOG match have empty eggNOG fields.
-The `Eggnog` column records `SUCCESS`, `FAILED`, or `NOT_RUN_NO_PROTEIN` for
-every output row. An eggNOG executable, database, or runtime failure produces a
-prominent warning but does not discard the completed deposited annotations;
-those rows are written with `Eggnog=FAILED` and empty eggNOG annotation fields.
-Use `--emapper` to select another executable and repeat `--emapper-arg` for
-additional eggNOG-mapper arguments. The eggNOG database must already be
-installed; provide its location with `--eggnog-data-dir` when it is not in the
-eggNOG-mapper default location.
+Matched proteins are deduplicated before eggNOG-mapper runs, and eggNOG fields
+are joined back into the annotation table. An eggNOG failure does not discard
+the deposited annotations. See the command reference for output columns and
+failure-state details.
 
 ### 2.6 Count annotation groups (`metatracer count`)
 
@@ -791,26 +444,9 @@ metatracer count \
   --column eggnog_OG
 ```
 
-Column names are matched without regard to capitalization or punctuation, so
-`--column taxid` matches the annotation column `Taxid`. For each read, all
-distinct values found for a selected column are sorted and joined with `;`.
-A read assigned to taxids 123 and 1234 therefore contributes one integer count
-to `123;1234`, not a fractional count to each taxid. Repeated annotation rows
-and repeated values do not increase the count. When multiple columns are
-selected, the complete per-read combination is counted as one group.
-
-The output is a TSV containing `sample_id`, the requested columns, and `count`.
-If an input has a `sample_id` or `sample` column, that value is used; otherwise,
-the input filename stem is the sample ID. Repeat `--input` to count multiple
-annotation tables together.
-
-**Blank values are not counted.** If a read has a blank value—or a missing-value
-marker such as `NA`, `N/A`, `NONE`, or `-`—in any requested `--column`, the
-entire read is omitted from that counting run. It is not placed in a blank or
-`UNASSIGNED` group. This is particularly important for `--column eggnog_OG`:
-reads for which eggNOG failed, did not run, or returned no OG are excluded from
-the resulting counts. Select only `--column taxid` when those reads should
-still contribute to taxonomic counts.
+Each read contributes one integer count to its observed value combination;
+multihits are retained as their own group. Blank values are not counted. See
+the command reference for grouping and missing-value behavior.
 
 Selected columns from an example `sample.annotated.tsv` output are shown below;
 the actual file includes all deposited-annotation columns followed by all
@@ -822,3 +458,313 @@ M01234:56:1:1101:10234:1056	562	GCF_000005845.2	NC_000913.3	345671	NP_414543.1	1
 ```
 
 ---
+
+
+## Command-line reference
+
+The following reflects the current public CLI. Run `metatracer COMMAND --help`
+in the installed environment to display the same information.
+
+<details>
+<summary><code>metatracer reference-build --help</code></summary>
+
+Plans size-bounded indices and creates their FASTA lists, sequence manifest,
+taxonomy audit, and summary. The accession table requires `accession` and
+`taxid`; optional `alternate_taxid` values default to `taxid`, while an optional
+non-negative `index` column manually assigns assemblies and overrides automatic
+size-based planning.
+
+Manifest sequence IDs encode the index number, a three-digit build token, and a
+per-index ordinal:
+
+```text
+(index × 10,000,000) + (build token × 10,000) + sequence ordinal
+```
+
+Automatic builds create a distinct token per index. A manual
+`--seqid-build-token` is allowed only for a build producing one index and must
+not be reused with the same index number. Index numbers are limited to `0–428`,
+each index may contain at most `9,999` sequences, and taxonomy identifiers must
+fit signed `int32`.
+
+```text
+Usage: metatracer reference-build [OPTIONS]
+
+  Scan Datasets genomes and plan source FASTAs into indices.
+
+Options:
+  --data-dir TEXT                 Base directory containing assembly
+                                  subdirectories (GCF_*). [required]
+  --accession-table TEXT          Table with accession, taxid, optional
+                                  alternate_taxid, and optional index. [required]
+  --out-dir TEXT                  Output directory for per-index FASTA lists.
+                                  [required]
+  --max-size-mb INTEGER           Target maximum FASTA size per index in MB.
+                                  [default: 10000]
+  --seqid-build-token INTEGER     Three-digit token for a single-index build;
+                                  default is a new token per index. [100-999]
+  --map-out TEXT                  Output sequence-manifest TSV.
+  --summary-out TEXT              Output summary path.
+  --taxonomy-map-out TEXT         Output assembly-taxonomy audit TSV.
+  --log TEXT                      Optional log file.
+  --verbose                       Enable debug logging.
+  -h, --help                      Show this message and exit.
+```
+
+</details>
+
+<details>
+<summary><code>metatracer index-build --help</code></summary>
+
+Builds one MG-index from FASTA input. It accepts repeated `--fasta` arguments or
+a `--fasta-list`; `--mapping` supplies the header, taxonomy identifiers, and
+sequence IDs generated by `reference-build`. Lower BWT/SA sampling rates use
+more memory but generally provide faster lookup.
+
+```text
+Usage: metatracer index-build [OPTIONS]
+
+  Build an MG-index from one or more reference FASTAs.
+
+Options:
+  -f, --fasta TEXT               FASTA database file; repeat for multiple files.
+  --fasta-list TEXT              File containing one FASTA path per line.
+  -i, --index TEXT               Output MG-index path. [required]
+  --mapping TEXT                 Header mapping with header, taxid,
+                                 alternate_taxid, and seqid columns.
+  --bwt-occ-sample-rate INTEGER  FM-index occurrence-table sampling interval.
+                                 [default: 64]
+  --sa-sample-rate INTEGER       Suffix-array sampling interval. [default: 32]
+  --skip-missing                 Warn and skip FASTA records absent from mapping.
+  -v, --verbose                  Enable debug logging.
+  -h, --help                     Show this message and exit.
+```
+
+</details>
+
+<details>
+<summary><code>metatracer assign --help</code></summary>
+
+Bins FASTA or FASTQ reads against one MG-index and writes long-format hit
+records. Existing nonempty output is resumed unless `--force-overwrite` is
+used. Run it once for every index and, when appropriate, for each read mate.
+
+```text
+Usage: metatracer assign [OPTIONS]
+
+  Assign reads to reference sequences.
+
+Options:
+  --fasta TEXT               Input FASTA reads.
+  --fastq TEXT               Input FASTQ reads.
+  --index TEXT               Input MG-index. [required]
+  -m, --results TEXT         Assignment output path. [required]
+  --max-assignments INTEGER  Stop after this many successful assignments/read.
+  --max-candidates INTEGER   Stop after checking this many candidates/read.
+  --max-hits INTEGER         Skip seeds with more than this many hits.
+                             [default: 2000]
+  --tune-max-hits INTEGER    Increase seed interval above this hit threshold.
+                             [default: 200]
+  --seed-size INTEGER        Seed size. [default: 18]
+  --min-seed FLOAT           Minimum seed percentage required for alignment.
+                             [default: 0.015]
+  --seed-interval INTEGER    Initial exact-match seed interval. [default: 15]
+  -e, --edit-rate FLOAT      Maximum edit proportion. [default: 0.13]
+  -t, --threads INTEGER      Worker threads. [default: 4]
+  --read-offset INTEGER      Skip this many reads. [default: 0]
+  --force-overwrite          Replace output instead of resuming it.
+  -v, --verbose              Enable debug logging.
+  -h, --help                 Show this message and exit.
+```
+
+</details>
+
+<details>
+<summary><code>metatracer merge --help</code></summary>
+
+Combines assignment files across indices and/or read mates. It always uses the
+TaxID–GID collapse behavior needed by annotation. `--report` writes the columns
+`taxid`, `only_hit`, `only_hit_pct`, `only_best`, `only_best_pct`, `tied_best`,
+`tied_best_pct`, `not_best`, `not_best_pct`, `total_reads`, and `total_pct`.
+
+```text
+Usage: metatracer merge [OPTIONS] [INPUTS]...
+
+  Merge assignment outputs across indices and/or read pairs.
+
+Options:
+  -o, --output TEXT        Combined output path. [required]
+  --report TEXT            Write a per-TaxID statistics TSV.
+  -t, --threads INTEGER    Sorting threads. [default: 4]
+  -v, --verbose            Enable debug logging.
+  -h, --help               Show this message and exit.
+```
+
+</details>
+
+<details>
+<summary><code>metatracer filter --help</code></summary>
+
+Reduces a merged assignment file using optional TaxID lists and edit-distance
+thresholds. Include filtering is applied first, exclusion second, and edit
+distance filtering last. Both TaxID lists may be supplied together.
+
+```text
+Usage: metatracer filter [OPTIONS]
+
+  Filter assignments by taxa and edit distance.
+
+Options:
+  --input TEXT                 Input assignments file. [required]
+  --out TEXT                   Filtered output file. [required]
+  --include-taxa TEXT          File containing TaxIDs to retain.
+  --exclude-taxa TEXT          File containing TaxIDs to remove.
+  --edit-delta INTEGER         Keep hits with edit <= minimum + delta.
+                               [default: 0]
+  --max-edit-distance INTEGER  Remove hits above this edit distance first.
+  --log TEXT                   Log file; default is standard error.
+  --verbose                    Enable debug logging.
+  -h, --help                   Show this message and exit.
+```
+
+</details>
+
+<details>
+<summary><code>metatracer taxa-report-filter --help</code></summary>
+
+Applies abundance and support thresholds to a merge report and writes both a
+filtered report and one-TaxID-per-line passing and failing lists suitable for
+`metatracer filter`.
+
+```text
+Usage: metatracer taxa-report-filter [OPTIONS]
+
+  Apply minimum cutoffs to a taxa summary and emit TaxID lists.
+
+Options:
+  --input TEXT                       Input taxa report (TSV/CSV). [required]
+  --out TEXT                         Filtered report. [required]
+  --include-out TEXT                 Passing TaxIDs, one per line. [required]
+  --exclude-out TEXT                 Failing TaxIDs, one per line. [required]
+  --log TEXT                         Parameter and summary log. [required]
+  --min-only-hit FLOAT               Minimum only_hit.
+  --min-only-hit-pct FLOAT           Minimum only_hit_pct.
+  --min-only-best FLOAT              Minimum only_best.
+  --min-only-best-pct FLOAT          Minimum only_best_pct.
+  --min-tied-best FLOAT              Minimum tied_best.
+  --min-tied-best-pct FLOAT          Minimum tied_best_pct.
+  --min-not-best FLOAT               Minimum not_best.
+  --min-not-best-pct FLOAT           Minimum not_best_pct.
+  --min-total-reads FLOAT            Minimum total_reads.
+  --min-total-pct FLOAT              Minimum total_pct.
+  --min-strong-support-fraction FLOAT
+                                      Minimum (only_hit + only_best)/total_reads.
+  --min-strong-count FLOAT           Minimum only_hit + only_best.
+  --min-strong-vs-weak-ratio FLOAT   Minimum strong/weak support ratio.
+  -h, --help                         Show this message and exit.
+```
+
+</details>
+
+<details>
+<summary><code>metatracer annotate --help</code></summary>
+
+Expands merged hits into a table and maps them to reference taxonomy, GFF CDS
+features, protein sequences, and eggNOG results. Repeat `--map-table` to use
+indices built at different times; manifests are joined by `(taxid, seqid)` and
+conflicting pairs are rejected.
+
+The default GFF and protein patterns follow the NCBI Datasets layout. Custom
+patterns may use `{basepath}`, `{accession}`, and `{assembly}`. GFFs are checked
+and, when necessary, sorted, BGZF-compressed, and Tabix-indexed. The resource
+report contains `accession`, `assembly_path`, `gff_path`, `protein_path`,
+`gff_sort_status`, `gff_index_status`, `status`, and `message`.
+
+Proteins are deduplicated before eggNOG-mapper. Returned fields receive an
+`eggnog_` prefix, and `eggnog_OG` contains the first OG without its taxonomic
+suffix. `Eggnog` reports `SUCCESS`, `FAILED`, or `NOT_RUN_NO_PROTEIN`. An
+eggNOG failure leaves deposited annotations intact and eggNOG fields blank.
+
+```text
+Usage: metatracer annotate [OPTIONS] ASSIGNMENTS
+
+  Add taxonomy and CDS/protein annotations.
+
+Options:
+  --map-table TEXT                Reference-build sequence manifest; repeat for
+                                  indices built at different times. [required]
+  -o, --out TEXT                  Output TSV. [required]
+  --taxa-only                     Omit GFF, protein, and eggNOG lookups.
+  --chunk-size INTEGER            Hits sorted per disk chunk. [default: 500000]
+  --tmpdir TEXT                   Temporary chunk directory.
+  --reference-basepath, --data-dir TEXT
+                                  Genome-download directory containing GFF and
+                                  protein FASTA resources.
+  --resource-report TEXT          Resource report; default: <out>.resources.tsv.
+  --gff-pattern TEXT              GFF glob using {basepath}, {accession}, and/or
+                                  {assembly}.
+  --protein-pattern TEXT          Protein-FASTA glob using the same placeholders.
+  --emapper TEXT                  eggNOG-mapper executable. [default: emapper.py]
+  --eggnog-cpu INTEGER            CPUs for eggNOG-mapper. [default: 1]
+  --eggnog-data-dir TEXT          eggNOG-mapper database directory.
+  --emapper-arg TEXT              Additional eggNOG argument; repeat as needed.
+  --gff-data-dir TEXT             Optional fallback GFF directory.
+  --protein-data-dir TEXT         Optional fallback protein FASTA directory.
+  --fuzzy INTEGER                 +/- bp CDS lookup window. [default: 0]
+  -v, --verbose                   Increase verbosity.
+  -h, --help                      Show this message and exit.
+```
+
+</details>
+
+<details>
+<summary><code>metatracer count --help</code></summary>
+
+Counts per-read groups from arbitrary annotation columns. Column matching is
+case- and punctuation-insensitive. Distinct alternatives are sorted and joined
+with `;`, so a read assigned to TaxIDs 123 and 1234 contributes one count to
+`123;1234`; repeated values do not inflate it. Repeated `--column` arguments
+count joint combinations.
+
+The output contains `sample_id`, the requested columns, and `count`. A
+`sample_id` or `sample` input column is used when present; otherwise the input
+filename stem is used. If any requested value is blank, `NA`, `N/A`, `NONE`, or
+`-`, the entire read is omitted rather than placed in an unassigned group.
+
+```text
+Usage: metatracer count [OPTIONS]
+
+  Count unique per-read assignments for selected annotation columns.
+
+Options:
+  --input FILE        Annotation TSV/CSV; repeat for multiple files. [required]
+  --output FILE       Count-table output. [required]
+  --column TEXT       Column to count; repeat for joint combinations. Reads
+                      blank in any requested column are omitted. [required]
+  --tmpdir DIRECTORY  Parent directory for the disk-backed counting database.
+  -h, --help          Show this message and exit.
+```
+
+</details>
+
+<details>
+<summary><code>metatracer extract-reads --help</code></summary>
+
+Partitions an input FASTA or FASTQ into matched and unmatched outputs according
+to whether each read ID occurs in any supplied assignment file.
+
+```text
+Usage: metatracer extract-reads [OPTIONS]
+
+  Partition reads according to assignment results.
+
+Options:
+  --fasta TEXT        Input FASTA reads.
+  --fastq TEXT        Input FASTQ reads.
+  --assignments TEXT  Assignment file; repeat for multiple files. [required]
+  --matched TEXT      Output for assigned reads. [required]
+  --unmatched TEXT    Output for unassigned reads. [required]
+  -h, --help          Show this message and exit.
+```
+
+</details>
