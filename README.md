@@ -6,8 +6,7 @@ MetaTracer is organized into two main workflows:
 1) **Reference MG-index build**
 2) **Read assignment + annotation**
 
-The reference workflow prepares genome FASTA files for indexing and can use
-matching GFF3 annotations and protein sequences during annotation. The
+The reference workflow includes genome FASTA and annotation data download and indexing. The
 assignment workflow bins reads against the indices, merges hits from multiple
 indices and/or samples (i.e. for paired reads), filters hits based on low
 frequency taxa and edit distances, then annotates hits with taxonomic and
@@ -43,7 +42,7 @@ conda install --name base -c conda-forge conda-build
 Build the package using the recipe in `conda/meta.yaml`:
 
 ```bash
-conda build -c conda-forge -c bioconda conda
+conda-build -c conda-forge -c bioconda conda
 ```
 
 Install the locally built package into a new environment:
@@ -103,14 +102,15 @@ The resulting assembly directories contain:
 - `*genomic.gff` / `*genomic.gff.gz` (GFF3 annotations)
 - `*protein.faa` (protein sequences)
 
-The GFF3 files used for annotation do not have to be the annotations supplied
-by NCBI Datasets. Users may regenerate the annotations or provide GFF3 files
-from another source. A replacement GFF must describe the same reference
-sequences—the GFF contig identifiers must match the FASTA sequence accessions—and
-its CDS identifiers must match the corresponding protein FASTA identifiers when
-protein and eggNOG annotation is required. Place replacement files in the
-download directory or configure `metatracer annotate --gff-pattern` to locate
-them. MetaTracer will check, sort, and index them during annotation as needed.
+> [!NOTE]
+> The GFF3 files used for annotation do not have to be the annotations supplied
+> by NCBI Datasets. Users may regenerate the annotations or provide GFF3 files
+> from another source. A replacement GFF must describe the same reference
+> sequences—the GFF contig identifiers must match the FASTA sequence accessions—and
+> its CDS identifiers must match the corresponding protein FASTA identifiers when
+> protein and eggNOG annotation is required. Place replacement files in the
+> download directory or configure `metatracer annotate --gff-pattern` to locate
+> them. MetaTracer will check, sort, and index them during annotation as needed.
 
 The same process is automated by the
 [genome-download Snakefile](metatracer/genome_download/Snakefile). Set
@@ -126,30 +126,30 @@ In addition to the rehydrated package, the Snakemake workflow writes
 nearest higher canonical rank) and uses the `accession` and `taxid` columns
 expected by `metatracer reference-build --report`.
 
+> [!NOTE]
 The `taxid` values in this file come from the NCBI taxonomy recorded in the
 NCBI Datasets download metadata. MetaTracer is not restricted to NCBI taxonomy:
 another scheme, such as GTDB, can be used by replacing the `taxid` values in
-the mapping data before it is passed through `reference-build` and supplied to
-`index-build`. The replacement identifiers must be encoded as signed 32-bit
+the mapping data before it is passed through `reference-build`. The replacement identifiers must be encoded as signed 32-bit
 integers (`int32`); text labels and values larger than `2,147,483,647` cannot be
-stored in the index. Keep the modified mapping file with the index so its
-integer identifiers can be interpreted downstream.
+stored in the index. We recommend keeping a mapping file to when using schemes that are not
+integer-based.
 
 After unpacking, you should have a directory containing assembly subdirectories such as:
 
 ```text
-references/ncbi_dataset/data/GCF_XXXXXXX.Y/
-  *_genomic.fna
-  *_genomic.gff[.gz]
-  *_protein.faa
+references/ncbi_dataset/data/{assembly accession}/
+  {assembly accession}_genomic.fna
+  genomic.gff[.gz]
+  protein.faa
 ```
 
 ---
 
 ### 1.2 Run `metatracer reference-build`
 
-The reference build scans downloaded genome FASTAs creates a plan to add them into
-size-bounded indices.
+The reference build scans downloaded genome FASTAs and creates a plan to add them into
+size-bounded indices. The size of the indices will determine how much memory is required to build the index and how much is required to load the index during assignment.
 
 `metatracer reference-build` takes:
 
@@ -165,9 +165,9 @@ size-bounded indices.
 Example accession table:
 
 ```tsv
-accession	taxid	alternate_taxid
-GCF_000005845.2	562	561
-GCF_000009045.1	1423	1386
+accession	taxid
+GCF_000005845.2	562
+GCF_000009045.1	1423
 ```
 
 Build the reference plan:
@@ -182,19 +182,42 @@ metatracer reference-build \
   --taxonomy-map-out metatracer_ref/metatracer_reference.taxonomy.tsv \
   --max-size-mb 10000
 ```
+>[!NOTE]
+An index token is used for each build which adds a unique key before sequence ids.
+This allows indices created at different times to be used together without collisions.
+The token is generated automatically but can be set by the user. It is important that
+the same token is not used for multiple builds.
+
 
 Outputs:
 
-* `metatracer_ref/metatracer_reference.index.0.fasta-list.txt`, `.1.fasta-list.txt`, ...
-* `metatracer_ref/metatracer_reference.map.tsv`
-* `metatracer_ref/metatracer_reference.taxonomy.tsv`
-* `metatracer_ref/metatracer_reference.summary.txt`
+#### `metatracer_reference.index.{N}.fasta-list.txt`
 
-**Use a new build token every time an index is created or rebuilt. Reusing the
-same token with the same index number can reproduce existing sequence IDs and
-cause ambiguous annotations when those indices are used together.** Automatic
-token generation is recommended. See the command reference for manifest
-fields, optional accession-table columns, and sequence-ID encoding details.
+One file is created for each planned index. Each line is the absolute path to
+one downloaded genomic FASTA assigned to that index. Pass each list to `metatracer index-build --fasta-list` to
+construct the corresponding MG-index.
+
+#### `metatracer_reference.map.tsv`
+
+The sequence manifest contains one row per FASTA sequence (usually one row per
+contig), with these columns:
+
+- `accession` and `assembly`: downloaded assembly identifiers.
+- `header` and `description`: the original FASTA record identifier and header.
+- `seqid`: the integer sequence identifier encoded into the MG-index.
+- `taxid` and `alternate_taxid`: the integer taxonomy assignments encoded for
+  that sequence.
+- `original_taxid`: the source values before any
+  normalization.
+- `taxid_source`: which source taxid was used.
+- `index`: the planned index number.
+- `fasta_path`: the absolute path to the source genomic FASTA.
+
+Pass this file to `metatracer index-build --mapping`. Retain it with the built
+index and later pass it to `metatracer annotate --map-table`; it is what allows
+an assignment's integer TaxID and sequence ID to be resolved back to an
+assembly, contig, and downloaded annotation resources.
+
 
 ---
 
@@ -203,14 +226,6 @@ fields, optional accession-table columns, and sequence-ID encoding details.
 `metatracer index-build` consumes each FASTA path list and the shared sequence
 manifest to build an MG-index.
 
-#### Benchmark for ~10 GB FASTA chunks
-
-| Metric | Mean | Median | Range |
-|---|---:|---:|---:|
-| Peak RSS | 263.0 GiB | 263.2 GiB | 260.6–265.4 GiB |
-| CPU time per index | 1.56 h | 1.62 h | 1.17–1.77 h |
-
-For this example, the total AWS compute costs would be approximately $50 assuming on demand pricing for r6i.12xlarge.
 
 Example:
 
@@ -229,15 +244,25 @@ Outputs:
 
 * MG-index files in `metatracer_index/` suitable for read binning.
 
-**Note:** New indices can be built without rebuilding existing indices. Retain
-the mapping file associated with each reference build for annotation.
+
+
+#### Benchmark for ~10 GB FASTA chunks
+Each index was approximately **35 GB** on disk.
+
+| Metric | Mean | Median | Range |
+|---|---:|---:|---:|
+| Peak RSS | 263.0 GiB | 263.2 GiB | 260.6–265.4 GiB |
+| CPU time per index | 1.56 h | 1.62 h | 1.17–1.77 h |
+
+For this example, the total AWS compute costs would be approximately $50 assuming on demand pricing for r6i.12xlarge.
+
 
 ### Clean-up
 
 The original genome FASTAs must remain available until all planned indices have
 been built because the path lists point to those files. After index construction
 has completed and the indices have been verified, the source FASTAs may be
-removed. Retain GFF and protein files when using deposited annotations.
+removed. Retain GFF and protein files for annotations.
 
 ---
 
@@ -261,23 +286,20 @@ for i in {0..10}; do
 done
 ```
 
-If the result file is not empty, `metatracer assign` will resume from the last assigned read and append to the file unless `--force-overwrite` is passed.
+>[!NOTE]
+Autoresume is set by default to avoid losing progress when a job is interrupted or does not fully complete. By default `metatracer assign` will automatically attempt resume from the last assigned read and append to the file unless `--force-overwrite` is passed.
 
 #### Binning output
 
 `metatracer assign` writes one line per read using the long output format:
 
 ```text
-read1:2-10-4=2,5-12-8=3
+{read-id}:{taxid}-{sequence-id}-{position}={edit distance},...
 ```
 
 The text before the final colon is the read ID. Each comma-separated hit uses
-`TAXID-GID-POSITION=EDIT_DISTANCE`. In the example, TaxID `2` matched GID `10`
-at position `4` with edit distance `2`, while TaxID `5` matched GID `12` at
-position `8` with edit distance `3`.
+`TAXID-SEQID-POSITION=EDIT_DISTANCE`.
 
-See the [mtsv_tools output-format documentation](https://github.com/FofanovLab/mtsv_tools#output-format)
-for the upstream format definition.
 
 ---
 
@@ -285,11 +307,11 @@ for the upstream format definition.
 
 We benchmarked `metatracer assign` on a reference collection split into **10 MG-indices** built with:
 
-* `chunk_size: 10`
+* `chunk_size: 10GB`
 * `sample_interval: 64`
 * `sa_sample: 32`
 
-Each index was approximately **35 GB** on disk.
+
 
 Benchmarking was performed on simulated oral metatranscriptomic read sets from [figshare: 10.6084/m9.figshare.31245190](https://doi.org/10.6084/m9.figshare.31245190). Each read set contained approximately **10 million 150bp reads**. Assignment was run separately against each index with **8 threads**, using **3 replicates per sample/index combination** (**90 total runs**), with the following command:
 
@@ -315,6 +337,7 @@ Observed assignment performance:
 * Max RSS, GB: mean `34.845`, median `34.847`, min `34.619`, max `34.881`, SD `0.030`
 
 For this example, an estimated total AWS compute cost would be up to $25 assuming current on-demand pricing on r7i.2xlarge.
+
 ---
 
 ### 2.3 Run `metatracer merge`
@@ -465,8 +488,7 @@ M01234:56:1:1101:10234:1056	562	GCF_000005845.2	NC_000913.3	345671	NP_414543.1	1
 The following reflects the current public CLI. Run `metatracer COMMAND --help`
 in the installed environment to display the same information.
 
-<details>
-<summary><code>metatracer reference-build --help</code></summary>
+### `metatracer reference-build`
 
 Plans size-bounded indices and creates their FASTA lists, sequence manifest,
 taxonomy audit, and summary. The accession table requires `accession` and
@@ -511,10 +533,7 @@ Options:
   -h, --help                      Show this message and exit.
 ```
 
-</details>
-
-<details>
-<summary><code>metatracer index-build --help</code></summary>
+### `metatracer index-build`
 
 Builds one MG-index from FASTA input. It accepts repeated `--fasta` arguments or
 a `--fasta-list`; `--mapping` supplies the header, taxonomy identifiers, and
@@ -540,10 +559,7 @@ Options:
   -h, --help                     Show this message and exit.
 ```
 
-</details>
-
-<details>
-<summary><code>metatracer assign --help</code></summary>
+### `metatracer assign`
 
 Bins FASTA or FASTQ reads against one MG-index and writes long-format hit
 records. Existing nonempty output is resumed unless `--force-overwrite` is
@@ -577,10 +593,7 @@ Options:
   -h, --help                 Show this message and exit.
 ```
 
-</details>
-
-<details>
-<summary><code>metatracer merge --help</code></summary>
+### `metatracer merge`
 
 Combines assignment files across indices and/or read mates. It always uses the
 TaxID–GID collapse behavior needed by annotation. `--report` writes the columns
@@ -600,10 +613,7 @@ Options:
   -h, --help               Show this message and exit.
 ```
 
-</details>
-
-<details>
-<summary><code>metatracer filter --help</code></summary>
+### `metatracer filter`
 
 Reduces a merged assignment file using optional TaxID lists and edit-distance
 thresholds. Include filtering is applied first, exclusion second, and edit
@@ -627,10 +637,7 @@ Options:
   -h, --help                   Show this message and exit.
 ```
 
-</details>
-
-<details>
-<summary><code>metatracer taxa-report-filter --help</code></summary>
+### `metatracer taxa-report-filter`
 
 Applies abundance and support thresholds to a merge report and writes both a
 filtered report and one-TaxID-per-line passing and failing lists suitable for
@@ -664,10 +671,7 @@ Options:
   -h, --help                         Show this message and exit.
 ```
 
-</details>
-
-<details>
-<summary><code>metatracer annotate --help</code></summary>
+### `metatracer annotate`
 
 Expands merged hits into a table and maps them to reference taxonomy, GFF CDS
 features, protein sequences, and eggNOG results. Repeat `--map-table` to use
@@ -715,10 +719,7 @@ Options:
   -h, --help                      Show this message and exit.
 ```
 
-</details>
-
-<details>
-<summary><code>metatracer count --help</code></summary>
+### `metatracer count`
 
 Counts per-read groups from arbitrary annotation columns. Column matching is
 case- and punctuation-insensitive. Distinct alternatives are sorted and joined
@@ -745,10 +746,7 @@ Options:
   -h, --help          Show this message and exit.
 ```
 
-</details>
-
-<details>
-<summary><code>metatracer extract-reads --help</code></summary>
+### `metatracer extract-reads`
 
 Partitions an input FASTA or FASTQ into matched and unmatched outputs according
 to whether each read ID occurs in any supplied assignment file.
@@ -766,5 +764,3 @@ Options:
   --unmatched TEXT    Output for unassigned reads. [required]
   -h, --help          Show this message and exit.
 ```
-
-</details>

@@ -15,13 +15,13 @@ build:
 
 requirements:
   host:
-    - python >=3.9
+    - python >=3.9,<3.14
     - pip
     - setuptools >=64
     - wheel
   run:
-    - python >=3.9
-    - mtsv-tools >=2.2.0
+    - python >=3.9,<3.14
+    - mtsv-tools >=2.1.0
     # Workflow runner and NCBI Datasets download/rehydration tools.
     - snakemake-minimal
     - ncbi-datasets-cli >=18.33.1
@@ -29,7 +29,7 @@ requirements:
     - click >=8.1
     - biopython >=1.80
     - pyfaidx
-    - pysam >=0.21
+    - pysam >=0.21  # not compatible with Python 3.14
     - intervaltree >=3.1
     - ete3 >=3.1
     - eggnog-mapper

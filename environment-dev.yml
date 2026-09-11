@@ -1,0 +1,31 @@
+name: metatracer-dev
+
+channels:
+  - conda-forge
+  - bioconda
+
+dependencies:
+  # Development and package-building tools
+  - python =3.11
+  - pip
+  - setuptools >=64
+  - wheel
+  - conda-build
+  - pytest >=7
+
+  # MetaTracer and mtsv-tools runtime
+  - mtsv-tools >=2.1.0
+  - click >=8.1
+  - biopython >=1.80
+  - pyfaidx
+  - pysam >=0.21
+  - htslib
+  - intervaltree >=3.1
+  - ete3 >=3.1
+  - tqdm >=4.64
+  - eggnog-mapper
+
+  # Genome-download Snakemake workflow
+  - snakemake-minimal
+  - ncbi-datasets-cli >=18.33.1
+  - unzip >=6.0
