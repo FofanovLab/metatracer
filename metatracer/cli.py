@@ -305,9 +305,6 @@ def index_build_cmd(
 
 
 @cli.command(name="merge")
-@click.option("--mode", type=click.Choice(["taxid", "taxid-gi"]), default="taxid",
-              show_default=True,
-              help="Collapse mode: taxid (pick min edit per taxid) or taxid-gi (pick min edit per taxid-gi).")
 @click.option("-o", "--output", "output_path", required=True,
               help="Path to write combined output to.")
 @click.option("--report", default=None, help="Write per-taxid stats TSV report.")
@@ -316,7 +313,6 @@ def index_build_cmd(
 @click.option("-v", "--verbose", count=True, help="Include this flag to trigger debug-level logging.")
 @click.argument("inputs", nargs=-1)
 def merge_cmd(
-    mode: str,
     output_path: str,
     report: Optional[str],
     threads: int,
@@ -330,7 +326,7 @@ def merge_cmd(
         raise click.ClickException("At least one input .bn file is required.")
 
     exe = _which_or_die(RUST_BINARIES["merge"])
-    argv = ["--mode", mode, "--output", output_path, "--threads", str(threads)]
+    argv = ["--mode", "taxid-gi", "--output", output_path, "--threads", str(threads)]
     if report:
         argv += ["--report", report]
     if verbose:
@@ -614,7 +610,10 @@ def taxa_report_filter_cmd(
 @click.option(
     "--reference-basepath", "--data-dir", "data_dir",
     default=None,
-    help="Base directory containing the NCBI Datasets ncbi_dataset/data tree.",
+    help=(
+        "Base genome-download directory containing the GFF and protein FASTA "
+        "resources (by default, an NCBI Datasets ncbi_dataset/data tree)."
+    ),
 )
 @click.option(
     "--resource-report",

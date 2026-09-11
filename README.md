@@ -17,7 +17,250 @@ Preprint: [MetaTracer bioRxiv manuscript](https://www.biorxiv.org/content/10.648
 
 ---
 
+## Command-line reference
+
+The following reflects the current public CLI. Run `metatracer COMMAND --help`
+in the installed environment to display the same information.
+
+<details>
+<summary><code>metatracer reference-build --help</code></summary>
+
+```text
+Usage: metatracer reference-build [OPTIONS]
+
+  Scan Datasets genomes and plan source FASTAs into indices.
+
+Options:
+  --data-dir TEXT                 Base directory containing assembly
+                                  subdirectories (GCF_*). [required]
+  --accession-table TEXT          Table with accession, taxid, optional
+                                  alternate_taxid, and optional index. [required]
+  --out-dir TEXT                  Output directory for per-index FASTA lists.
+                                  [required]
+  --max-size-mb INTEGER           Target maximum FASTA size per index in MB.
+                                  [default: 10000]
+  --seqid-build-token INTEGER     Three-digit token for a single-index build;
+                                  default is a new token per index. [100-999]
+  --map-out TEXT                  Output sequence-manifest TSV.
+  --summary-out TEXT              Output summary path.
+  --taxonomy-map-out TEXT         Output assembly-taxonomy audit TSV.
+  --log TEXT                      Optional log file.
+  --verbose                       Enable debug logging.
+  -h, --help                      Show this message and exit.
+```
+
+</details>
+
+<details>
+<summary><code>metatracer index-build --help</code></summary>
+
+```text
+Usage: metatracer index-build [OPTIONS]
+
+  Build an MG-index from one or more reference FASTAs.
+
+Options:
+  -f, --fasta TEXT               FASTA database file; repeat for multiple files.
+  --fasta-list TEXT              File containing one FASTA path per line.
+  -i, --index TEXT               Output MG-index path. [required]
+  --mapping TEXT                 Header mapping with header, taxid,
+                                 alternate_taxid, and seqid columns.
+  --bwt-occ-sample-rate INTEGER  FM-index occurrence-table sampling interval.
+                                 [default: 64]
+  --sa-sample-rate INTEGER       Suffix-array sampling interval. [default: 32]
+  --skip-missing                 Warn and skip FASTA records absent from mapping.
+  -v, --verbose                  Enable debug logging.
+  -h, --help                     Show this message and exit.
+```
+
+</details>
+
+<details>
+<summary><code>metatracer assign --help</code></summary>
+
+```text
+Usage: metatracer assign [OPTIONS]
+
+  Assign reads to reference sequences.
+
+Options:
+  --fasta TEXT               Input FASTA reads.
+  --fastq TEXT               Input FASTQ reads.
+  --index TEXT               Input MG-index. [required]
+  -m, --results TEXT         Assignment output path. [required]
+  --max-assignments INTEGER  Stop after this many successful assignments/read.
+  --max-candidates INTEGER   Stop after checking this many candidates/read.
+  --max-hits INTEGER         Skip seeds with more than this many hits.
+                             [default: 2000]
+  --tune-max-hits INTEGER    Increase seed interval above this hit threshold.
+                             [default: 200]
+  --seed-size INTEGER        Seed size. [default: 18]
+  --min-seed FLOAT           Minimum seed percentage required for alignment.
+                             [default: 0.015]
+  --seed-interval INTEGER    Initial exact-match seed interval. [default: 15]
+  -e, --edit-rate FLOAT      Maximum edit proportion. [default: 0.13]
+  -t, --threads INTEGER      Worker threads. [default: 4]
+  --read-offset INTEGER      Skip this many reads. [default: 0]
+  --force-overwrite          Replace output instead of resuming it.
+  -v, --verbose              Enable debug logging.
+  -h, --help                 Show this message and exit.
+```
+
+</details>
+
+<details>
+<summary><code>metatracer merge --help</code></summary>
+
+```text
+Usage: metatracer merge [OPTIONS] [INPUTS]...
+
+  Merge assignment outputs across indices and/or read pairs.
+
+Options:
+  -o, --output TEXT        Combined output path. [required]
+  --report TEXT            Write a per-TaxID statistics TSV.
+  -t, --threads INTEGER    Sorting threads. [default: 4]
+  -v, --verbose            Enable debug logging.
+  -h, --help               Show this message and exit.
+```
+
+</details>
+
+<details>
+<summary><code>metatracer filter --help</code></summary>
+
+```text
+Usage: metatracer filter [OPTIONS]
+
+  Filter assignments by taxa and edit distance.
+
+Options:
+  --input TEXT                 Input assignments file. [required]
+  --out TEXT                   Filtered output file. [required]
+  --include-taxa TEXT          File containing TaxIDs to retain.
+  --exclude-taxa TEXT          File containing TaxIDs to remove.
+  --edit-delta INTEGER         Keep hits with edit <= minimum + delta.
+                               [default: 0]
+  --max-edit-distance INTEGER  Remove hits above this edit distance first.
+  --log TEXT                   Log file; default is standard error.
+  --verbose                    Enable debug logging.
+  -h, --help                   Show this message and exit.
+```
+
+</details>
+
+<details>
+<summary><code>metatracer taxa-report-filter --help</code></summary>
+
+```text
+Usage: metatracer taxa-report-filter [OPTIONS]
+
+  Apply minimum cutoffs to a taxa summary and emit TaxID lists.
+
+Options:
+  --input TEXT                       Input taxa report (TSV/CSV). [required]
+  --out TEXT                         Filtered report. [required]
+  --include-out TEXT                 Passing TaxIDs, one per line. [required]
+  --exclude-out TEXT                 Failing TaxIDs, one per line. [required]
+  --log TEXT                         Parameter and summary log. [required]
+  --min-only-hit FLOAT               Minimum only_hit.
+  --min-only-hit-pct FLOAT           Minimum only_hit_pct.
+  --min-only-best FLOAT              Minimum only_best.
+  --min-only-best-pct FLOAT          Minimum only_best_pct.
+  --min-tied-best FLOAT              Minimum tied_best.
+  --min-tied-best-pct FLOAT          Minimum tied_best_pct.
+  --min-not-best FLOAT               Minimum not_best.
+  --min-not-best-pct FLOAT           Minimum not_best_pct.
+  --min-total-reads FLOAT            Minimum total_reads.
+  --min-total-pct FLOAT              Minimum total_pct.
+  --min-strong-support-fraction FLOAT
+                                      Minimum (only_hit + only_best)/total_reads.
+  --min-strong-count FLOAT           Minimum only_hit + only_best.
+  --min-strong-vs-weak-ratio FLOAT   Minimum strong/weak support ratio.
+  -h, --help                         Show this message and exit.
+```
+
+</details>
+
+<details>
+<summary><code>metatracer annotate --help</code></summary>
+
+```text
+Usage: metatracer annotate [OPTIONS] ASSIGNMENTS
+
+  Add taxonomy and CDS/protein annotations.
+
+Options:
+  --map-table TEXT                Reference-build sequence manifest; repeat for
+                                  indices built at different times. [required]
+  -o, --out TEXT                  Output TSV. [required]
+  --taxa-only                     Omit GFF, protein, and eggNOG lookups.
+  --chunk-size INTEGER            Hits sorted per disk chunk. [default: 500000]
+  --tmpdir TEXT                   Temporary chunk directory.
+  --reference-basepath, --data-dir TEXT
+                                  Genome-download directory containing GFF and
+                                  protein FASTA resources.
+  --resource-report TEXT          Resource report; default: <out>.resources.tsv.
+  --gff-pattern TEXT              GFF glob using {basepath}, {accession}, and/or
+                                  {assembly}.
+  --protein-pattern TEXT          Protein-FASTA glob using the same placeholders.
+  --emapper TEXT                  eggNOG-mapper executable. [default: emapper.py]
+  --eggnog-cpu INTEGER            CPUs for eggNOG-mapper. [default: 1]
+  --eggnog-data-dir TEXT          eggNOG-mapper database directory.
+  --emapper-arg TEXT              Additional eggNOG argument; repeat as needed.
+  --gff-data-dir TEXT             Optional fallback GFF directory.
+  --protein-data-dir TEXT         Optional fallback protein FASTA directory.
+  --fuzzy INTEGER                 +/- bp CDS lookup window. [default: 0]
+  -v, --verbose                   Increase verbosity.
+  -h, --help                      Show this message and exit.
+```
+
+</details>
+
+<details>
+<summary><code>metatracer count --help</code></summary>
+
+```text
+Usage: metatracer count [OPTIONS]
+
+  Count unique per-read assignments for selected annotation columns.
+
+Options:
+  --input FILE        Annotation TSV/CSV; repeat for multiple files. [required]
+  --output FILE       Count-table output. [required]
+  --column TEXT       Column to count; repeat for joint combinations. Reads
+                      blank in any requested column are omitted. [required]
+  --tmpdir DIRECTORY  Parent directory for the disk-backed counting database.
+  -h, --help          Show this message and exit.
+```
+
+</details>
+
+<details>
+<summary><code>metatracer extract-reads --help</code></summary>
+
+```text
+Usage: metatracer extract-reads [OPTIONS]
+
+  Partition reads according to assignment results.
+
+Options:
+  --fasta TEXT        Input FASTA reads.
+  --fastq TEXT        Input FASTQ reads.
+  --assignments TEXT  Assignment file; repeat for multiple files. [required]
+  --matched TEXT      Output for assigned reads. [required]
+  --unmatched TEXT    Output for unassigned reads. [required]
+  -h, --help          Show this message and exit.
+```
+
+</details>
+
+---
+
 ## Installation
+
+> **Platform support:** Currently supports Linux only; the bundled SSW
+> alignment library uses x86-specific instructions and does not compile natively on Apple Silicon.
 
 Install MetaTracer and its dependencies from Conda channels:
 
@@ -100,6 +343,15 @@ The resulting assembly directories contain:
 - `*genomic.gff` / `*genomic.gff.gz` (GFF3 annotations)
 - `*protein.faa` (protein sequences)
 
+The GFF3 files used for annotation do not have to be the annotations supplied
+by NCBI Datasets. Users may regenerate the annotations or provide GFF3 files
+from another source. A replacement GFF must describe the same reference
+sequences—the GFF contig identifiers must match the FASTA sequence accessions—and
+its CDS identifiers must match the corresponding protein FASTA identifiers when
+protein and eggNOG annotation is required. Place replacement files in the
+download directory or configure `metatracer annotate --gff-pattern` to locate
+them. MetaTracer will check, sort, and index them during annotation as needed.
+
 The same process is automated by the
 [genome-download Snakefile](metatracer/genome_download/Snakefile). Set
 `accession_file` in `metatracer/genome_download/config.yaml`, then run:
@@ -113,6 +365,15 @@ In addition to the rehydrated package, the Snakemake workflow writes
 `downloads/accession_taxid.tsv`. It rolls organism TaxIDs up to species (or the
 nearest higher canonical rank) and uses the `accession` and `taxid` columns
 expected by `metatracer reference-build --report`.
+
+The `taxid` values in this file come from the NCBI taxonomy recorded in the
+NCBI Datasets download metadata. MetaTracer is not restricted to NCBI taxonomy:
+another scheme, such as GTDB, can be used by replacing the `taxid` values in
+the mapping data before it is passed through `reference-build` and supplied to
+`index-build`. The replacement identifiers must be encoded as signed 32-bit
+integers (`int32`); text labels and values larger than `2,147,483,647` cannot be
+stored in the index. Keep the modified mapping file with the index so its
+integer identifiers can be interpreted downstream.
 
 After unpacking, you should have a directory containing assembly subdirectories such as:
 
@@ -221,7 +482,7 @@ exceeded.
 
 The supplied taxonomy IDs are used directly; `reference-build` does not infer
 their taxonomy source or automatically roll them to another rank. Both ID
-columns must fit in an unsigned 32-bit integer.
+columns must be representable as signed 32-bit integers (`int32`).
 
 ---
 
@@ -236,6 +497,8 @@ manifest to build an MG-index.
 |---|---:|---:|---:|
 | Peak RSS | 263.0 GiB | 263.2 GiB | 260.6–265.4 GiB |
 | CPU time per index | 1.56 h | 1.62 h | 1.17–1.77 h |
+
+For this example, the total AWS compute costs would be approximately $50 assuming on demand pricing for r6i.12xlarge.
 
 Example:
 
@@ -339,6 +602,7 @@ Observed assignment performance:
 * Wall time, minutes: mean `20.29`, median `17.77`, min `8.80`, max `74.43`, SD `9.81`
 * Max RSS, GB: mean `34.845`, median `34.847`, min `34.619`, max `34.881`, SD `0.030`
 
+For this example, an estimated total AWS compute cost would be up to $25 assuming current on-demand pricing on r7i.2xlarge.
 ---
 
 ### 2.3 Run `metatracer merge`
@@ -354,7 +618,6 @@ Example:
 metatracer merge \
   --output merged/sample.assignments.clp \
   --report metatracer_assignment_report.tsv \
-  --mode taxid-gi \
   --threads 16 \
   assignments/sample.R1.chunk.0.bn \
   assignments/sample.R2.chunk.0.bn \
@@ -364,19 +627,12 @@ metatracer merge \
 ```
 
 Because `metatracer assign` writes long-format input, merge writes one compact
-line per read. The output format depends on `--mode`.
+line per read. Merge always retains the lowest-edit-distance assignment for
+each TaxID–GID pair. If tied hits for a pair contain positions, the smaller
+position is retained. TaxID, sequence ID, and position are preserved so the
+result can be passed directly to `metatracer annotate`.
 
-The `--mode` option controls which hits are retained:
-
-* `--mode taxid` (the default) retains the lowest edit-distance assignment for
-  each TaxID and writes `READ_ID:TAXID=EDIT_DISTANCE,...`.
-* `--mode taxid-gi` retains the lowest edit-distance assignment for each
-  TaxID–GID pair. If tied hits for a pair contain positions, the smaller
-  position is retained. This mode is recommended when downstream annotation is
-  planned because it preserves reference-specific assignments and writes
-  `READ_ID:TAXID-GID-POSITION=EDIT_DISTANCE,...`.
-
-For example, `--mode taxid-gi` can produce:
+For example, merge can produce:
 
 ```text
 read123:562-10-400=1,562-11-300=1
@@ -425,6 +681,13 @@ Notes:
 annotations. Pass the sequence manifest created by `reference-build` and the
 base directory containing the rehydrated NCBI Datasets package.
 
+**Deposited annotation requires the GFF and protein FASTA files associated with
+the downloaded reference genomes.** Keep these files in the genome download
+directory and pass that directory with `--reference-basepath`. The default
+search patterns expect the rehydrated NCBI Datasets layout shown below. A genome
+FASTA by itself is sufficient for indexing, but it is not sufficient for this
+annotation step.
+
 Example:
 
 ```bash
@@ -466,9 +729,13 @@ standard glob wildcards. For example:
 ```
 
 Each assembly directory must contain exactly one genomic GFF and one protein
-FASTA. A sorted, indexed GFF is reused. An unindexed sorted GFF is BGZF
-compressed and Tabix indexed. An unsorted GFF is written to a new sorted file,
-then compressed and indexed; the downloaded source file is retained.
+FASTA. GFF files may be provided already coordinate-sorted, BGZF-compressed,
+and Tabix-indexed. MetaTracer checks each GFF before annotation and reuses a
+valid prepared file. If necessary, it attempts to sort, BGZF-compress, and
+Tabix-index the GFF automatically in the genome download directory. The
+download directory must therefore be writable when preparation is required.
+Automatically generated sorted and indexed files are stored beside the
+downloaded resources, while the original downloaded GFF is retained.
 
 The resource report contains one row per assembly with these columns:
 
