@@ -9,7 +9,7 @@ source:
   path: ..
 
 build:
-  number: 0
+  number: 1
   noarch: python
   script: {{ PYTHON }} -m pip install . --no-deps --no-build-isolation -vv
 
@@ -22,8 +22,13 @@ requirements:
   run:
     - python >=3.9
     - mtsv-tools >=2.2.0
+    # Workflow runner and NCBI Datasets download/rehydration tools.
+    - snakemake-minimal
+    - ncbi-datasets-cli >=18.33.1
+    - unzip >=6.0
     - click >=8.1
     - biopython >=1.80
+    - pyfaidx
     - pysam >=0.21
     - intervaltree >=3.1
     - ete3 >=3.1
