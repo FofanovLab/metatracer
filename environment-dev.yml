@@ -25,7 +25,6 @@ dependencies:
   - tqdm >=4.64
   - eggnog-mapper
 
-  # Genome-download Snakemake workflow
-  - snakemake-minimal
+  # Genome-download tools (install Snakemake separately to run the workflow)
   - ncbi-datasets-cli >=18.33.1
   - unzip >=6.0

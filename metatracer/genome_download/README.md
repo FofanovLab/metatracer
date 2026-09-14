@@ -18,10 +18,26 @@ directory is desired, or GFF3/protein files should also be downloaded.
 
 ## Run
 
-From this directory:
+Snakemake is required only to execute the complete workflow; it is not a
+MetaTracer package dependency. Install it separately (for example,
+`conda install -c conda-forge -c bioconda snakemake-minimal`) and run from this
+directory:
 
 ```bash
 snakemake --use-conda --cores 8
+```
+
+Alternatively, use the [Snakefile](Snakefile) as a template and run its
+`datasets`, `metatracer reference-build`, and `metatracer index-build` commands
+manually. The only conversion logic outside those commands is
+[`accession_species_taxids.py`](accession_species_taxids.py), which creates the
+final `accession_taxid.tsv` table from the dehydrated NCBI Datasets package.
+Run it after downloading the package:
+
+```bash
+python accession_species_taxids.py \
+  --package downloads/ncbi_dataset.zip \
+  --output downloads/accession_taxid.tsv
 ```
 
 The workflow creates:

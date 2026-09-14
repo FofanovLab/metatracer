@@ -22,8 +22,7 @@ requirements:
   run:
     - python >=3.9,<3.14
     - mtsv-tools >=2.1.0
-    # Workflow runner and NCBI Datasets download/rehydration tools.
-    - snakemake-minimal
+    # NCBI Datasets download/rehydration tools (Snakemake is optional).
     - ncbi-datasets-cli >=18.33.1
     - unzip >=6.0
     - click >=8.1

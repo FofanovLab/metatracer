@@ -74,64 +74,14 @@ rule accession_species_taxids:
         "envs/ncbi_datasets.yaml"
     log:
         f"{LOGS}/accession_taxids.log"
-    run:
-        import csv
-        import subprocess
-        from pathlib import Path
-
-        from ete3 import NCBITaxa
-
-        Path(output.report).parent.mkdir(parents=True, exist_ok=True)
-        Path(log[0]).parent.mkdir(parents=True, exist_ok=True)
-        command = [
-            "dataformat", "tsv", "genome",
-            "--package", str(input.archive),
-            "--fields", "accession,organism-tax-id",
-            "--elide-header",
-        ]
-        result = subprocess.run(command, text=True, capture_output=True)
-        Path(log[0]).write_text(result.stderr, encoding="utf-8")
-        if result.returncode:
-            raise subprocess.CalledProcessError(result.returncode, command)
-
-        rows = []
-        for row in csv.reader(result.stdout.splitlines(), delimiter="\t"):
-            if len(row) >= 2 and row[0].strip() and row[1].strip():
-                rows.append((row[0].strip().upper(), int(row[1])))
-        if not rows:
-            raise ValueError("NCBI package contains no accession-to-TaxID records")
-
-        ncbi = NCBITaxa()
-        canonical_ranks = (
-            "species", "genus", "family", "order",
-            "class", "phylum", "superkingdom",
-        )
-        rolled = {}
-        for taxid in sorted({taxid for _, taxid in rows}):
-            try:
-                lineage = ncbi.get_lineage(taxid) or [taxid]
-            except Exception:
-                lineage = [taxid]
-            rank_by_taxid = ncbi.get_rank(lineage)
-            taxid_by_rank = {
-                rank_by_taxid.get(lineage_taxid): lineage_taxid
-                for lineage_taxid in lineage
-            }
-            rolled[taxid] = next(
-                (
-                    taxid_by_rank[rank]
-                    for rank in canonical_ranks
-                    if rank in taxid_by_rank
-                ),
-                taxid,
-            )
-
-        with open(output.report, "w", encoding="utf-8", newline="") as handle:
-            writer = csv.writer(handle, delimiter="\t", lineterminator="\n")
-            writer.writerow(["accession", "taxid"])
-            writer.writerows(
-                (accession, rolled[taxid]) for accession, taxid in rows
-            )
+    shell:
+        """
+        mkdir -p {OUT:q} {LOGS:q}
+        python accession_species_taxids.py \
+          --package {input.archive:q} \
+          --output {output.report:q} \
+          > {log:q} 2>&1
+        """
 
 
 rule extract_and_rehydrate:
