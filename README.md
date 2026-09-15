@@ -268,6 +268,11 @@ removed. Retain GFF and protein files for annotations.
 
 ## 2) Assignment Workflow
 
+The [sample test data and pipeline](metatracer/test_data/pipeline_demo/) provide
+a small runnable Snakemake example covering assignment, merge, annotation, and
+counting. Edit its `config.yaml` to point to your indices and reference-build
+manifest files.
+
 ---
 
 ### 2.1 Run `metatracer assign`
