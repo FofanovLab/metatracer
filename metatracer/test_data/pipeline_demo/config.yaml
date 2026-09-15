@@ -1,0 +1,27 @@
+# Run from this directory with: snakemake --cores 4
+
+reads: reads/reads_40.fastq
+reads_format: fastq
+
+# Add every MetaTracer index that should be searched. Assignment runs once per
+# entry and the resulting files are merged before annotation.
+indices:
+  - /path/to/reference/indices/metatracer_reference.index.0.index
+
+# Add the sequence-manifest TSV associated with each index build. These are the
+# files produced by `metatracer reference-build --map-out`.
+map_tables:
+  - /path/to/reference/metatracer_reference.map.tsv
+
+# Set taxa_only to false to use GFF/protein files and eggNOG. In that case,
+# reference_basepath should contain ncbi_dataset/data/<accession>/ directories.
+taxa_only: true
+reference_basepath: /path/to/downloads/package
+
+threads: 4
+output_dir: results
+
+# Repeat values here to count joint combinations, for example [taxid, eggnog_OG].
+# Rows blank in any selected column are not counted.
+count_columns:
+  - taxid

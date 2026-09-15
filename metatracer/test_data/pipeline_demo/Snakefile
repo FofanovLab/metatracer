@@ -1,0 +1,135 @@
+"""Minimal MetaTracer analysis workflow for the bundled demonstration reads."""
+
+from shlex import quote
+
+
+configfile: "config.yaml"
+
+READS = config.get("reads", "reads/reads_40.fastq")
+READS_FORMAT = config.get("reads_format", "fastq").lower()
+INDICES = config["indices"]
+MAP_TABLES = config["map_tables"]
+REFERENCE_BASEPATH = config.get("reference_basepath")
+OUT = config.get("output_dir", "results").rstrip("/")
+THREADS = int(config.get("threads", 1))
+TAXA_ONLY = bool(config.get("taxa_only", True))
+COUNT_COLUMNS = config.get("count_columns", ["taxid"])
+
+if READS_FORMAT not in {"fasta", "fastq"}:
+    raise ValueError("reads_format must be 'fasta' or 'fastq'")
+if not INDICES:
+    raise ValueError("config.yaml must list at least one index")
+if not MAP_TABLES:
+    raise ValueError("config.yaml must list at least one map table")
+if not TAXA_ONLY and not REFERENCE_BASEPATH:
+    raise ValueError("reference_basepath is required when taxa_only is false")
+if not COUNT_COLUMNS:
+    raise ValueError("count_columns must contain at least one annotation column")
+
+INDEX_IDS = list(range(len(INDICES)))
+ASSIGNMENTS = expand(f"{OUT}/assign/index_{{index}}.bn", index=INDEX_IDS)
+MERGED = f"{OUT}/merged/reads.clp"
+REPORT = f"{OUT}/merged/taxa_report.tsv"
+ANNOTATED = f"{OUT}/annotated/reads.tsv"
+RESOURCE_REPORT = f"{OUT}/annotated/resources.tsv"
+COUNTS = f"{OUT}/counts.tsv"
+
+
+rule all:
+    input:
+        COUNTS,
+
+
+rule assign:
+    input:
+        reads=READS,
+    output:
+        f"{OUT}/assign/index_{{index}}.bn",
+    params:
+        index=lambda wildcards: INDICES[int(wildcards.index)],
+        reads_flag=f"--{READS_FORMAT}",
+    threads:
+        THREADS
+    shell:
+        """
+        mkdir -p {OUT:q}/assign
+        metatracer assign \
+          {params.reads_flag} {input.reads:q} \
+          --index {params.index:q} \
+          --results {output:q} \
+          --threads {threads} \
+          --force-overwrite
+        """
+
+
+rule merge:
+    input:
+        ASSIGNMENTS,
+    output:
+        merged=MERGED,
+        report=REPORT,
+    threads:
+        THREADS
+    shell:
+        """
+        mkdir -p {OUT:q}/merged
+        metatracer merge \
+          --output {output.merged:q} \
+          --report {output.report:q} \
+          --threads {threads} \
+          {input:q}
+        """
+
+
+rule annotate:
+    input:
+        assignments=MERGED,
+        maps=MAP_TABLES,
+    output:
+        table=ANNOTATED,
+    params:
+        map_args=lambda wildcards, input: " ".join(
+            f"--map-table {quote(str(path))}" for path in input.maps
+        ),
+        taxa_only="--taxa-only" if TAXA_ONLY else "",
+        reference=(
+            ""
+            if TAXA_ONLY
+            else f"--reference-basepath {quote(str(REFERENCE_BASEPATH))}"
+        ),
+        resource_report=(
+            ""
+            if TAXA_ONLY
+            else f"--resource-report {quote(RESOURCE_REPORT)}"
+        ),
+    threads:
+        THREADS
+    shell:
+        """
+        mkdir -p {OUT:q}/annotated
+        metatracer annotate {input.assignments:q} \
+          {params.map_args} \
+          --out {output.table:q} \
+          --eggnog-cpu {threads} \
+          {params.taxa_only} \
+          {params.reference} \
+          {params.resource_report}
+        """
+
+
+rule count:
+    input:
+        ANNOTATED,
+    output:
+        COUNTS,
+    params:
+        columns=" ".join(
+            f"--column {quote(str(column))}" for column in COUNT_COLUMNS
+        ),
+    shell:
+        """
+        metatracer count \
+          --input {input:q} \
+          --output {output:q} \
+          {params.columns}
+        """

@@ -77,7 +77,7 @@ rule accession_species_taxids:
     shell:
         """
         mkdir -p {OUT:q} {LOGS:q}
-        python accession_species_taxids.py \
+        "$CONDA_PREFIX/bin/python" accession_species_taxids.py \
           --package {input.archive:q} \
           --output {output.report:q} \
           > {log:q} 2>&1
