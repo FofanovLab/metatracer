@@ -1,6 +1,8 @@
 
 # MetaTracer — Basic Usage
 
+Release history: [Changelog](CHANGELOG.md).
+
 MetaTracer is organized into two main workflows:
 
 1) **Reference MG-index build**
