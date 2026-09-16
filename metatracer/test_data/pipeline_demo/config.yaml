@@ -25,6 +25,7 @@ reference_basepath: /path/to/downloads/package
 eggnog_data_dir: /path/to/eggnog_data
 eggnog_downloader: download_eggnog_data.py
 
+# Workers for GFF preparation and CPUs for eggNOG (these phases run sequentially).
 threads: 4
 output_dir: results
 

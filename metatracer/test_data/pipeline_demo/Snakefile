@@ -169,6 +169,7 @@ rule annotate:
           {params.map_args} \
           --out {output.table:q} \
           --eggnog-cpu {threads} \
+          --threads {threads} \
           {params.eggnog_data} \
           {params.taxa_only} \
           {params.skip_eggnog} \

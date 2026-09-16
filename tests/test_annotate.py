@@ -2,6 +2,7 @@ import csv
 import os
 import gzip
 import struct
+import threading
 
 import pytest
 
@@ -236,6 +237,48 @@ def test_gff_query_failure_is_not_silently_ignored():
     annotator.by_assembly = {"asm": MappingRow("1", 101, "asm", "NC_1", "", "bad.gff.gz", "")}
     with pytest.raises(annotate_mod.GFFQueryError, match="partial CDS annotations discarded"):
         annotator._build_tree_for_contig("asm", "NC_1")
+
+
+@pytest.mark.parametrize("threads", [1, 2])
+def test_parallel_preparation_reports_all_assemblies_in_order(tmp_path, monkeypatch, threads):
+    mappings = {}
+    for assembly in ["GCF_Z.1", "GCF_A.1", "GCF_MISSING.1"]:
+        folder = tmp_path / "ncbi_dataset" / "data" / assembly
+        folder.mkdir(parents=True)
+        mappings[assembly] = MappingRow("1", 101, assembly, "NC_1", "", "", "")
+        if "MISSING" not in assembly:
+            (folder / "genomic.gff").write_text(
+                "NC_1\tRefSeq\tCDS\t5\t10\t.\t+\t0\tID=cds-a\n"
+                "###\n"
+                "NC_1\tRefSeq\tCDS\t20\t30\t.\t+\t0\tID=cds-b\n"
+            )
+            (folder / "protein.faa").write_text(">a\nMKK\n")
+    validator = annotate_mod.validate_gff_index
+    barrier = threading.Barrier(2)
+    worker_names = []
+
+    def validate(path, pysam, source_path=None):
+        worker_names.append(threading.current_thread().name)
+        if threads > 1:
+            # Both independent assemblies must reach validation concurrently.
+            barrier.wait(timeout=10)
+        return validator(path, pysam, source_path)
+
+    monkeypatch.setattr(annotate_mod, "validate_gff_index", validate)
+    report = tmp_path / "resources.tsv"
+    prepared, ready = prepare_annotation_resources(mappings, str(tmp_path), str(report), threads=threads)
+    assert not ready
+    assert list(prepared) == ["GCF_A.1", "GCF_Z.1"]
+    with report.open() as handle:
+        rows = list(csv.DictReader(handle, delimiter="\t"))
+    assert [row["accession"] for row in rows] == sorted(mappings)
+    assert [row["status"] for row in rows] == ["READY", "MISSING_OR_AMBIGUOUS_RESOURCE", "READY"]
+    assert len(set(worker_names)) == threads
+
+
+def test_preparation_rejects_invalid_thread_count(tmp_path):
+    with pytest.raises(ValueError, match="threads must be at least 1"):
+        prepare_annotation_resources({}, str(tmp_path), str(tmp_path / "report.tsv"), threads=0)
 
 
 def test_prepare_resources_reports_missing_files(tmp_path):

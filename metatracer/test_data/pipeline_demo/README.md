@@ -33,6 +33,9 @@ Full annotation also writes `results/annotated/unique_proteins.faa`, the
 deduplicated FASTA supplied to eggNOG. FASTA IDs match `Protein ID` in the table.
 This file is retained when eggNOG fails or is skipped, and is empty when no
 proteins are found. Taxa-only annotation does not produce it.
+The `threads` setting controls parallel per-assembly GFF preparation and,
+in a later phase, eggNOG CPUs. Files in the same directory are prepared serially
+to avoid conflicting writes. Read parsing and annotation-table merging remain serial.
 
 Each step captures stdout and stderr under `results/logs/`: `assign/index_*.log`,
 `merge.log`, `download_eggnog_data.log`, `annotate.log`, and `count.log`.

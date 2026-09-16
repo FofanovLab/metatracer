@@ -54,6 +54,8 @@ import re
 import shutil
 import subprocess
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
+from threading import Lock
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Optional, Tuple
@@ -438,8 +440,11 @@ def prepare_annotation_resources(
     report_path: str,
     gff_pattern: str = DEFAULT_GFF_PATTERN,
     protein_pattern: str = DEFAULT_PROTEIN_PATTERN,
+    threads: int = 1,
 ) -> Tuple[Dict[str, MappingRow], bool]:
     """Resolve, sort, compress, and index deposited resources for every assembly."""
+    if threads < 1:
+        raise ValueError("threads must be at least 1")
     rows: List[dict] = []
     prepared: Dict[str, MappingRow] = {}
     all_ready = True
@@ -457,7 +462,7 @@ def prepare_annotation_resources(
         _write_resource_report(report_path, rows)
         return prepared, False
 
-    for assembly in sorted(by_assembly):
+    def prepare_one(assembly):
         mapping = by_assembly[assembly]
         accession = mapping.resource_accession or assembly
         row = {
@@ -486,9 +491,7 @@ def prepare_annotation_resources(
             if protein is None:
                 missing.append("protein FASTA: " + protein_result)
             row.update(status="MISSING_OR_AMBIGUOUS_RESOURCE", message="; ".join(missing))
-            rows.append(row)
-            all_ready = False
-            continue
+            return None, row
         try:
             validate_gff_sort_order(str(gff))
             row["gff_sort_status"] = "ALREADY_SORTED"
@@ -507,9 +510,7 @@ def prepare_annotation_resources(
                     gff_sort_status="FAILED", gff_index_status="NOT_ATTEMPTED",
                     status="GFF_SORT_FAILED", message=str(sort_exc),
                 )
-                rows.append(row)
-                all_ready = False
-                continue
+                return None, row
 
         indexed_gff = sorted_gff
         try:
@@ -551,16 +552,44 @@ def prepare_annotation_resources(
                     row["message"] = "; ".join(filter(None, [row["message"], rebuild_reason]))
         except Exception as exc:
             row.update(gff_index_status="FAILED", status="GFF_INDEX_FAILED", message=str(exc))
-            rows.append(row)
-            all_ready = False
-            continue
+            return None, row
 
         row["gff_path"] = str(indexed_gff.resolve())
-        prepared[assembly] = replace(
+        prepared_mapping = replace(
             mapping, gff_path=row["gff_path"], protein_fa_path=row["protein_path"]
         )
-        rows.append(row)
+        return prepared_mapping, row
 
+    # Serialize files sharing a directory, including custom patterns that resolve
+    # multiple assemblies to the same GFF, to avoid concurrent index writes.
+    directory_locks = {}
+    locks_guard = Lock()
+
+    def prepare_one_locked(assembly):
+        mapping = by_assembly[assembly]
+        accession = mapping.resource_accession or assembly
+        gff, _ = _find_pattern_resource(
+            gff_pattern, base_path, accession, assembly, (".gff", ".gff.gz")
+        )
+        directory = gff.parent.resolve() if gff else Path(base_path).resolve()
+        with locks_guard:
+            lock = directory_locks.setdefault(directory, Lock())
+        with lock:
+            return prepare_one(assembly)
+
+    assemblies = sorted(by_assembly)
+    if threads == 1:
+        results = [prepare_one(assembly) for assembly in assemblies]
+    else:
+        with ThreadPoolExecutor(max_workers=threads) as executor:
+            # map preserves assembly order, regardless of completion order.
+            results = list(executor.map(prepare_one_locked, assemblies))
+    for assembly, (mapping, row) in zip(assemblies, results):
+        rows.append(row)
+        if mapping is None:
+            all_ready = False
+        else:
+            prepared[assembly] = mapping
     _write_resource_report(report_path, rows)
     return prepared, all_ready
 
@@ -1221,8 +1250,11 @@ def run(
     verbose: int = 0,
     skip_eggnog: bool = False,
     proteins_out: Optional[str] = None,
+    threads: int = 1,
 ) -> int:
     setup_logging(verbose)
+    if threads < 1:
+        raise SystemExit("--threads must be at least 1")
 
     if taxa_only and proteins_out:
         raise SystemExit("--proteins-out cannot be used with --taxa-only")
@@ -1242,9 +1274,9 @@ def run(
                 "--reference-basepath is required for deposited GFF/protein annotation"
             )
         resolved_report = resource_report or (out + ".resources.tsv")
-        logging.info("Preparing deposited annotation resources...")
+        logging.info("Preparing deposited annotation resources with %d worker(s)...", threads)
         by_assembly, resources_ready = prepare_annotation_resources(
-            by_assembly, data_dir, resolved_report, gff_pattern, protein_pattern
+            by_assembly, data_dir, resolved_report, gff_pattern, protein_pattern, threads
         )
         if not resources_ready:
             raise SystemExit(
@@ -1435,6 +1467,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                    help="Only output taxa/position/edit columns (no GFF/protein lookups).")
     p.add_argument("--chunk-size", type=int, default=500_000,
                    help="Max hits per chunk before sorting to disk.")
+    p.add_argument("--threads", type=int, default=1,
+                   help="Parallel workers for per-assembly GFF preparation (default: 1).")
     p.add_argument("--tmpdir", default=None,
                    help="Temp directory for chunk files (default: system temp).")
     p.add_argument("--reference-basepath", "--data-dir", dest="data_dir", default=None,
@@ -1474,6 +1508,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         skip_eggnog=args.skip_eggnog,
         proteins_out=args.proteins_out,
         chunk_size=args.chunk_size,
+        threads=args.threads,
         tmpdir=args.tmpdir,
         data_dir=args.data_dir,
         gff_data_dir=args.gff_data_dir,

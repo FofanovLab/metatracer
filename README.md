@@ -719,6 +719,12 @@ embedded FASTA are excluded to avoid Tabix failures on internal `###` separators
 The report records `REINDEXED` and the reason. Index preparation failures are reported as
 `GFF_INDEX_FAILED`; later query failures stop annotation and are reported as
 `GFF_QUERY_FAILED`, rather than silently retaining partial CDS lookups.
+Use `--threads N` to prepare independent assemblies concurrently (default: 1).
+Files sharing a directory are serialized to prevent index-write conflicts, and
+the resource report remains sorted by assembly. Each worker handles one GFF
+serially. Read parsing and annotation-table merging remain serial;
+`--eggnog-cpu` separately controls the later eggNOG phase. Start with a modest
+worker count on shared storage: concurrent sorting increases memory and I/O load.
 
 Proteins are deduplicated before eggNOG-mapper.
 Full annotation also saves the exact deduplicated input FASTA to
@@ -748,6 +754,8 @@ Options:
   --proteins-out TEXT             Unique eggNOG input protein FASTA; default:
                                   <out>.proteins.faa.
   --chunk-size INTEGER            Hits sorted per disk chunk. [default: 500000]
+  --threads INTEGER               Parallel workers for per-assembly GFF
+                                  preparation. [default: 1]
   --tmpdir TEXT                   Temporary chunk directory.
   --reference-basepath, --data-dir TEXT
                                   Genome-download directory containing GFF and
