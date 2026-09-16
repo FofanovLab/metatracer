@@ -10,10 +10,10 @@ From this directory, run:
 snakemake --cores 4
 ```
 
-The default `taxa_only: true` setting avoids requiring GFF, protein, and eggNOG
-resources. To demonstrate full annotation, set `taxa_only: false` and set
+The default `taxa_only: false` setting performs full annotation. Set
 `reference_basepath` to the rehydrated NCBI Datasets package directory that
-contains `ncbi_dataset/data/<accession>/`.
+contains `ncbi_dataset/data/<accession>/`. To skip GFF, protein, and eggNOG
+lookups, set `taxa_only: true`.
 
 Final outputs are written under `results/`; `results/annotated/reads.tsv` is the
 per-hit annotation table and `results/counts.tsv` is the summarized count table.

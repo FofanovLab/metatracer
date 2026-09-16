@@ -622,13 +622,13 @@ def taxa_report_filter_cmd(
 )
 @click.option(
     "--gff-pattern",
-    default="{basepath}/ncbi_dataset/data/{accession}/*_genomic.gff*",
+    default="{basepath}/ncbi_dataset/data/{accession}/genomic.gff",
     show_default=True,
     help="GFF glob template using {basepath}, {accession}, and/or {assembly}.",
 )
 @click.option(
     "--protein-pattern",
-    default="{basepath}/ncbi_dataset/data/{accession}/*_protein.faa*",
+    default="{basepath}/ncbi_dataset/data/{accession}/protein.faa",
     show_default=True,
     help="Protein FASTA glob template using {basepath}, {accession}, and/or {assembly}.",
 )

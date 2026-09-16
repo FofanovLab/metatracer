@@ -99,8 +99,8 @@ datasets rehydrate --directory references --no-progressbar
 The resulting assembly directories contain:
 
 - `*genomic.fna` (reference genome sequences)
-- `*genomic.gff` / `*genomic.gff.gz` (GFF3 annotations)
-- `*protein.faa` (protein sequences)
+- `genomic.gff` (GFF3 annotations)
+- `protein.faa` (protein sequences)
 
 > [!NOTE]
 > The GFF3 files used for annotation do not have to be the annotations supplied
@@ -434,8 +434,8 @@ The default resource patterns match the standard rehydrated NCBI Datasets
 layout:
 
 ```text
-GFF:     {basepath}/ncbi_dataset/data/{accession}/*_genomic.gff*
-Protein: {basepath}/ncbi_dataset/data/{accession}/*_protein.faa*
+GFF:     {basepath}/ncbi_dataset/data/{accession}/genomic.gff
+Protein: {basepath}/ncbi_dataset/data/{accession}/protein.faa
 ```
 
 Each assembly directory must contain exactly one genomic GFF and one protein

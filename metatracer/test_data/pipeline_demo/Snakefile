@@ -12,7 +12,7 @@ MAP_TABLES = config["map_tables"]
 REFERENCE_BASEPATH = config.get("reference_basepath")
 OUT = config.get("output_dir", "results").rstrip("/")
 THREADS = int(config.get("threads", 1))
-TAXA_ONLY = bool(config.get("taxa_only", True))
+TAXA_ONLY = bool(config.get("taxa_only", False))
 COUNT_COLUMNS = config.get("count_columns", ["taxid"])
 
 if READS_FORMAT not in {"fasta", "fastq"}:

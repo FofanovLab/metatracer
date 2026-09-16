@@ -13,9 +13,10 @@ indices:
 map_tables:
   - /path/to/reference/metatracer_reference.map.tsv
 
-# Set taxa_only to false to use GFF/protein files and eggNOG. In that case,
-# reference_basepath should contain ncbi_dataset/data/<accession>/ directories.
-taxa_only: true
+# Full annotation uses GFF/protein files and eggNOG. Set taxa_only to true to
+# skip those lookups. reference_basepath should contain
+# ncbi_dataset/data/<accession>/ directories when taxa_only is false.
+taxa_only: false
 reference_basepath: /path/to/downloads/package
 
 threads: 4

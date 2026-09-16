@@ -104,13 +104,13 @@ def test_prepare_resources_sorts_indexes_and_reports(tmp_path):
     assembly = "GCF_000001.1"
     assembly_dir = tmp_path / "ncbi_dataset" / "data" / assembly
     assembly_dir.mkdir(parents=True)
-    (assembly_dir / "sample_genomic.gff").write_text(
+    (assembly_dir / "genomic.gff").write_text(
         "##gff-version 3\n"
         "NC_1\tRefSeq\tCDS\t20\t30\t.\t+\t0\tID=cds-b\n"
         "NC_1\tRefSeq\tCDS\t5\t10\t.\t+\t0\tID=cds-a\n",
         encoding="utf-8",
     )
-    (assembly_dir / "sample_protein.faa").write_text(">cds-a\nMKK\n", encoding="utf-8")
+    (assembly_dir / "protein.faa").write_text(">cds-a\nMKK\n", encoding="utf-8")
     mapping = MappingRow("1", 101, assembly, "NC_1", "contig", "", "")
     report = tmp_path / "resources.tsv"
 

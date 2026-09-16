@@ -272,8 +272,8 @@ RESOURCE_REPORT_FIELDS = [
     "accession", "assembly_path", "gff_path", "protein_path",
     "gff_sort_status", "gff_index_status", "status", "message",
 ]
-DEFAULT_GFF_PATTERN = "{basepath}/ncbi_dataset/data/{accession}/*_genomic.gff*"
-DEFAULT_PROTEIN_PATTERN = "{basepath}/ncbi_dataset/data/{accession}/*_protein.faa*"
+DEFAULT_GFF_PATTERN = "{basepath}/ncbi_dataset/data/{accession}/genomic.gff"
+DEFAULT_PROTEIN_PATTERN = "{basepath}/ncbi_dataset/data/{accession}/protein.faa"
 
 
 def validate_gff_sort_order(gff_path: str) -> None:
