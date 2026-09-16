@@ -10,6 +10,8 @@ READS_FORMAT = config.get("reads_format", "fastq").lower()
 INDICES = config["indices"]
 MAP_TABLES = config["map_tables"]
 REFERENCE_BASEPATH = config.get("reference_basepath")
+EGGNOG_DATA_DIR = config.get("eggnog_data_dir")
+EGGNOG_DOWNLOADER = config.get("eggnog_downloader", "download_eggnog_data.py")
 OUT = config.get("output_dir", "results").rstrip("/")
 THREADS = int(config.get("threads", 1))
 TAXA_ONLY = bool(config.get("taxa_only", False))
@@ -23,6 +25,8 @@ if not MAP_TABLES:
     raise ValueError("config.yaml must list at least one map table")
 if not TAXA_ONLY and not REFERENCE_BASEPATH:
     raise ValueError("reference_basepath is required when taxa_only is false")
+if not TAXA_ONLY and not EGGNOG_DATA_DIR:
+    raise ValueError("eggnog_data_dir is required when taxa_only is false")
 if not COUNT_COLUMNS:
     raise ValueError("count_columns must contain at least one annotation column")
 
@@ -33,6 +37,15 @@ REPORT = f"{OUT}/merged/taxa_report.tsv"
 ANNOTATED = f"{OUT}/annotated/reads.tsv"
 RESOURCE_REPORT = f"{OUT}/annotated/resources.tsv"
 COUNTS = f"{OUT}/counts.tsv"
+EGGNOG_PATH = str(EGGNOG_DATA_DIR or ".eggnog_data").rstrip("/")
+EGGNOG_FILES = (
+    []
+    if TAXA_ONLY
+    else [
+        f"{EGGNOG_PATH}/eggnog.db",
+        f"{EGGNOG_PATH}/eggnog_proteins.dmnd",
+    ]
+)
 
 
 rule all:
@@ -81,10 +94,27 @@ rule merge:
         """
 
 
+rule download_eggnog_data:
+    output:
+        annotation=f"{EGGNOG_PATH}/eggnog.db",
+        diamond=f"{EGGNOG_PATH}/eggnog_proteins.dmnd",
+    params:
+        data_dir=EGGNOG_DATA_DIR,
+        downloader=EGGNOG_DOWNLOADER,
+    shell:
+        """
+        mkdir -p {params.data_dir:q}
+        {params.downloader:q} -y --data_dir {params.data_dir:q}
+        test -s {output.annotation:q}
+        test -s {output.diamond:q}
+        """
+
+
 rule annotate:
     input:
         assignments=MERGED,
         maps=MAP_TABLES,
+        eggnog=EGGNOG_FILES,
     output:
         table=ANNOTATED,
     params:
@@ -102,6 +132,11 @@ rule annotate:
             if TAXA_ONLY
             else f"--resource-report {quote(RESOURCE_REPORT)}"
         ),
+        eggnog_data=(
+            ""
+            if TAXA_ONLY
+            else f"--eggnog-data-dir {quote(str(EGGNOG_DATA_DIR))}"
+        ),
     threads:
         THREADS
     shell:
@@ -111,6 +146,7 @@ rule annotate:
           {params.map_args} \
           --out {output.table:q} \
           --eggnog-cpu {threads} \
+          {params.eggnog_data} \
           {params.taxa_only} \
           {params.reference} \
           {params.resource_report}

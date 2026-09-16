@@ -19,6 +19,11 @@ map_tables:
 taxa_only: false
 reference_basepath: /path/to/downloads/package
 
+# eggNOG-mapper does not bundle its databases. The workflow downloads the core
+# annotation and DIAMOND databases here when they are not already present.
+eggnog_data_dir: /path/to/eggnog_data
+eggnog_downloader: download_eggnog_data.py
+
 threads: 4
 output_dir: results
 

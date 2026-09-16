@@ -416,6 +416,23 @@ search patterns expect the rehydrated NCBI Datasets layout shown below. A genome
 FASTA by itself is sufficient for indexing, but it is not sufficient for this
 annotation step.
 
+#### Set up the eggNOG-mapper databases
+
+Installing `eggnog-mapper` does not install its annotation or DIAMOND
+databases. Before using eggNOG during annotation, download the core databases
+to a persistent directory with sufficient space:
+
+```bash
+mkdir -p /path/to/eggnog_data
+download_eggnog_data.py -y --data_dir /path/to/eggnog_data
+```
+
+Pass the same directory to annotation with `--eggnog-data-dir`. Without this
+setup, eggNOG-mapper reports that `eggnog_proteins.dmnd` is missing. The
+[sample pipeline](metatracer/test_data/pipeline_demo/) includes a
+`download_eggnog_data` rule that performs this setup when the database files
+are absent.
+
 Example:
 
 ```bash
