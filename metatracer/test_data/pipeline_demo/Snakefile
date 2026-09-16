@@ -104,7 +104,12 @@ rule download_eggnog_data:
     shell:
         """
         mkdir -p {params.data_dir:q}
-        {params.downloader:q} -y --data_dir {params.data_dir:q}
+        downloader=$(command -v {params.downloader:q})
+        fixed_downloader=$(mktemp)
+        trap 'rm -f "$fixed_downloader"' EXIT
+        # eggNOG-mapper 2.1.15 still uses the obsolete database host.
+        sed 's|eggnogdb[.]embl[.]de|eggnog5.embl.de|g' "$downloader" > "$fixed_downloader"
+        python "$fixed_downloader" -y --data_dir {params.data_dir:q}
         test -s {output.annotation:q}
         test -s {output.diamond:q}
         """

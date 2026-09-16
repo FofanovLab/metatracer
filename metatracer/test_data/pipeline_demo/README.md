@@ -20,6 +20,9 @@ Full annotation also requires the separate eggNOG-mapper databases. Set
 `download_eggnog_data` rule runs `download_eggnog_data.py -y --data_dir` when
 `eggnog.db` or `eggnog_proteins.dmnd` is missing, and annotation passes that
 directory to `metatracer annotate --eggnog-data-dir`.
+The rule runs a temporary copy of the downloader with the obsolete
+`eggnogdb.embl.de` host replaced by `eggnog5.embl.de`, without modifying the
+installed package.
 
 Final outputs are written under `results/`; `results/annotated/reads.tsv` is the
 per-hit annotation table and `results/counts.tsv` is the summarized count table.
