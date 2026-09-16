@@ -46,6 +46,7 @@ import argparse
 import csv
 import glob
 import gzip
+import hashlib
 import heapq
 import logging
 import os
@@ -378,6 +379,50 @@ def _find_pattern_resource(
     return unique[0], "found"
 
 
+def validate_gff_index(gff_path: str, pysam, source_path: Optional[str] = None) -> None:
+    """Verify indexed queries against every feature row and a coordinate probe."""
+    expected = {}
+    source_path = source_path or gff_path
+    opener = gzip.open if source_path.endswith(".gz") else open
+    with opener(source_path, "rt", encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, 1):
+            if line.startswith("##FASTA"):
+                break
+            if not line.strip() or line.startswith("#"):
+                continue
+            record = line.rstrip("\r\n")
+            fields = record.split("\t")
+            if len(fields) != 9:
+                raise ValueError(f"Invalid GFF feature at line {line_number}")
+            start, end = int(fields[3]), int(fields[4])
+            if start < 1 or end < start:
+                raise ValueError(f"Invalid GFF coordinates at line {line_number}")
+            contig = fields[0]
+            if contig not in expected:
+                expected[contig] = (hashlib.sha256(), start, record)
+            expected[contig][0].update((record + "\n").encode("utf-8"))
+    with pysam.TabixFile(gff_path) as tb:
+        if set(tb.contigs) != set(expected):
+            raise ValueError("GFF index contigs do not match the feature records")
+        for contig, (digest, start, first_record) in expected.items():
+            actual = hashlib.sha256()
+            for line in tb.fetch(contig):
+                if line and not line.startswith("#"):
+                    actual.update((line.rstrip("\r\n") + "\n").encode("utf-8"))
+            if actual.digest() != digest.digest():
+                raise ValueError(f"GFF index returned incomplete or mismatched records for {contig}")
+            if first_record not in tb.fetch(contig, start - 1, start):
+                raise ValueError(f"GFF index coordinate query failed for {contig}:{start}")
+
+
+class GFFQueryError(RuntimeError):
+    """A GFF query failed; partial annotation must not be used."""
+
+    def __init__(self, assembly: str, message: str):
+        self.assembly = assembly
+        super().__init__(message)
+
+
 def _write_resource_report(path: str, rows: List[dict]) -> None:
     report_path = Path(path)
     report_path.parent.mkdir(parents=True, exist_ok=True)
@@ -468,27 +513,42 @@ def prepare_annotation_resources(
 
         indexed_gff = sorted_gff
         try:
-            if sorted_gff.suffix == ".gz" and Path(str(sorted_gff) + ".tbi").exists():
-                pysam.TabixFile(str(sorted_gff)).close()
+            plain = assembly_dir / (sorted_gff.name.removesuffix(".gz") + ".for_tabix.gff")
+            candidate = sorted_gff if sorted_gff.suffix == ".gz" else Path(str(sorted_gff) + ".gz")
+            derivative = Path(str(plain) + ".gz")
+            if derivative.exists() and Path(str(derivative) + ".tbi").exists():
+                candidate = derivative
+            reusable = False
+            rebuild_reason = ""
+            if candidate.exists() and Path(str(candidate) + ".tbi").exists():
+                try:
+                    validate_gff_index(str(candidate), pysam, str(sorted_gff))
+                    reusable = True
+                except Exception as exc:
+                    rebuild_reason = f"Rebuilt invalid GFF index: {exc}"
+                    logging.warning("%s: %s", accession, rebuild_reason)
+            if reusable:
+                indexed_gff = candidate
                 row["gff_index_status"] = "ALREADY_INDEXED"
             else:
-                if sorted_gff.suffix == ".gz":
-                    plain = assembly_dir / (sorted_gff.name.removesuffix(".gz") + ".for_tabix.gff")
-                    with gzip.open(sorted_gff, "rt", encoding="utf-8", errors="replace") as src, \
-                            plain.open("wt", encoding="utf-8", newline="") as dst:
-                        for line in src:
-                            if line.startswith("##FASTA"):
-                                break
+                # Build a derivative, preserving the user's GFF and any existing index.
+                opener = gzip.open if sorted_gff.suffix == ".gz" else open
+                with opener(sorted_gff, "rt", encoding="utf-8") as src, \
+                        plain.open("wt", encoding="utf-8", newline="") as dst:
+                    for line in src:
+                        if line.startswith("##FASTA"):
+                            break
+                        # Tabix can fail on comments between features, including ###.
+                        # Keep only features in this derivative; never edit the source.
+                        if line.strip() and not line.startswith("#"):
                             dst.write(line)
-                    indexed_gff = Path(pysam.tabix_index(
-                        str(plain), preset="gff", force=True, keep_original=False
-                    ))
-                else:
-                    indexed_gff = Path(pysam.tabix_index(
-                        str(sorted_gff), preset="gff", force=True, keep_original=True
-                    ))
-                pysam.TabixFile(str(indexed_gff)).close()
-                row["gff_index_status"] = "INDEXED"
+                indexed_gff = Path(pysam.tabix_index(
+                    str(plain), preset="gff", force=True, keep_original=False
+                ))
+                validate_gff_index(str(indexed_gff), pysam, str(sorted_gff))
+                row["gff_index_status"] = "REINDEXED" if rebuild_reason else "INDEXED"
+                if rebuild_reason:
+                    row["message"] = "; ".join(filter(None, [row["message"], rebuild_reason]))
         except Exception as exc:
             row.update(gff_index_status="FAILED", status="GFF_INDEX_FAILED", message=str(exc))
             rows.append(row)
@@ -738,8 +798,13 @@ class IntervalGFFAnnotator:
 
                 tree.addi(start, end + 1, (cds_id, product))
                 cds_count += 1
-        except ValueError:
-            pass
+        except (ValueError, OSError) as exc:
+            raise GFFQueryError(
+                assembly,
+                f"GFF query failed for assembly {assembly}, contig {contig}, "
+                f"file {self.by_assembly[assembly].gff_path}; "
+                f"partial CDS annotations discarded: {exc}",
+            ) from exc
 
         logging.debug("Built CDS tree: assembly=%s contig=%s CDS=%d",
                       assembly, contig, cds_count)
@@ -1154,8 +1219,19 @@ def run(
     emapper_args: Tuple[str, ...] = (),
     fuzzy: int = 0,
     verbose: int = 0,
+    skip_eggnog: bool = False,
+    proteins_out: Optional[str] = None,
 ) -> int:
     setup_logging(verbose)
+
+    if taxa_only and proteins_out:
+        raise SystemExit("--proteins-out cannot be used with --taxa-only")
+    saved_proteins = None if taxa_only else Path(proteins_out or (out + ".proteins.faa"))
+    if saved_proteins is not None:
+        protected = [out, assignments, *map_table, resource_report or (out + ".resources.tsv")]
+        if saved_proteins.resolve() in {Path(path).resolve() for path in protected}:
+            raise SystemExit("Protein output must be distinct from annotation, input, and resource-report files")
+        saved_proteins.parent.mkdir(parents=True, exist_ok=True)
 
     logging.info("Loading mapping table...")
     by_key, by_assembly = load_mapping_tables(map_table)
@@ -1248,6 +1324,8 @@ def run(
 
     if not chunk_paths:
         logging.warning("No hits found. Writing header-only output.")
+        if saved_proteins is not None:
+            saved_proteins.write_text("", encoding="utf-8")
         with open(out, "wt", encoding="utf-8", newline="") as out_handle:
             w = csv.writer(out_handle, delimiter="\t")
             header = [
@@ -1273,19 +1351,40 @@ def run(
     with tempfile.TemporaryDirectory(prefix="metatracer_eggnog_") as eggnog_work:
         proteins_path = os.path.join(eggnog_work, "unique_proteins.faa")
         annotation_path = os.path.join(eggnog_work, "deposited_annotations.tsv")
-        merge_sorted_chunks(
-            chunk_paths=chunk_paths,
-            taxid_to_name=taxid_to_name,
-            out_tsv=(out if taxa_only else annotation_path),
-            taxa_only=taxa_only,
-            by_assembly=by_assembly,
-            proteins_fasta_out=proteins_path,
-            fuzzy=fuzzy,
-            gff_data_dir=resolved_gff_data_dir,
-            protein_data_dir=resolved_protein_data_dir,
-        )
+        try:
+            merge_sorted_chunks(
+                chunk_paths=chunk_paths,
+                taxid_to_name=taxid_to_name,
+                out_tsv=(out if taxa_only else annotation_path),
+                taxa_only=taxa_only,
+                by_assembly=by_assembly,
+                proteins_fasta_out=proteins_path,
+                fuzzy=fuzzy,
+                gff_data_dir=resolved_gff_data_dir,
+                protein_data_dir=resolved_protein_data_dir,
+            )
+        except GFFQueryError as exc:
+            with open(resolved_report, newline="", encoding="utf-8") as handle:
+                report_rows = list(csv.DictReader(handle, delimiter="\t"))
+            failed_path = by_assembly[exc.assembly].gff_path
+            for row in report_rows:
+                if row["gff_path"] == failed_path:
+                    row.update(status="GFF_QUERY_FAILED", message=str(exc))
+            _write_resource_report(resolved_report, report_rows)
+            raise SystemExit(f"{exc}; see {resolved_report}") from exc
         if not taxa_only:
-            if os.path.getsize(proteins_path) == 0:
+            # Persist the exact deduplicated input before running eggNOG so it
+            # remains available even if eggNOG fails or is explicitly skipped.
+            shutil.copyfile(proteins_path, saved_proteins)
+            logging.info("Unique protein FASTA: %s", saved_proteins)
+            if skip_eggnog:
+                logging.info("Skipping eggNOG annotation (--skip-eggnog).")
+                columns = [
+                    (field, _eggnog_output_name(field)) for field in DEFAULT_EGGNOG_FIELDS
+                ]
+                annotations = {}
+                eggnog_status = "SKIPPED"
+            elif os.path.getsize(proteins_path) == 0:
                 columns = [
                     (field, _eggnog_output_name(field)) for field in DEFAULT_EGGNOG_FIELDS
                 ]
@@ -1348,6 +1447,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                    help="Protein FASTA glob template using {basepath}, {accession}, and/or {assembly}.")
     p.add_argument("--emapper", default="emapper.py",
                    help="eggNOG-mapper executable.")
+    p.add_argument("--skip-eggnog", action="store_true",
+                   help="Skip eggNOG; retain GFF/protein annotations with Eggnog=SKIPPED.")
+    p.add_argument("--proteins-out", default=None,
+                   help="Save unique eggNOG input proteins (default: <out>.proteins.faa).")
     p.add_argument("--eggnog-cpu", type=int, default=1,
                    help="CPUs passed to eggNOG-mapper.")
     p.add_argument("--eggnog-data-dir", default=None,
@@ -1368,6 +1471,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         map_table=args.map_table,
         out=args.out,
         taxa_only=args.taxa_only,
+        skip_eggnog=args.skip_eggnog,
+        proteins_out=args.proteins_out,
         chunk_size=args.chunk_size,
         tmpdir=args.tmpdir,
         data_dir=args.data_dir,

@@ -1,7 +1,11 @@
 import csv
 import os
+import gzip
+import struct
 
 import pytest
+
+from metatracer import annotate as annotate_mod
 
 from metatracer.annotate import (
     HitRecord,
@@ -25,6 +29,56 @@ def test_parse_assignments_line_handles_colons_and_hits():
     read_id, hits = parse_assignments_line("read:1:2:123-foo-5=1,999=2")
     assert read_id == "read:1:2"
     assert hits == ["123-foo-5=1", "999=2"]
+
+
+@pytest.mark.parametrize("protein_sequence", ["", ">protein1\nMAAA\n"])
+@pytest.mark.parametrize("custom_output", [False, True])
+def test_skip_eggnog_preserves_deposited_annotations(tmp_path, monkeypatch, protein_sequence, custom_output):
+    assignments = tmp_path / "reads.clp"
+    assignments.write_text("read1:123=0\n")
+    output = tmp_path / "annotated.tsv"
+    proteins_out = tmp_path / "proteins" / "unique.faa" if custom_output else None
+    monkeypatch.setattr(annotate_mod, "load_mapping_tables", lambda paths: ({}, {}))
+    monkeypatch.setattr(annotate_mod, "prepare_annotation_resources", lambda *args: ({}, True))
+    monkeypatch.setattr(annotate_mod, "build_taxid_name_map", lambda ids: {123: "Taxon"})
+
+    def fake_merge(**kwargs):
+        assert not kwargs["taxa_only"]
+        with open(kwargs["out_tsv"], "w") as handle:
+            handle.write("ReadID\tProtein ID\tAnnotation\nread1\tprotein1\tATPase\n")
+        with open(kwargs["proteins_fasta_out"], "w") as handle:
+            handle.write(protein_sequence)
+
+    def unexpected_emapper(*args, **kwargs):
+        pytest.fail("eggNOG must not run when skip_eggnog is true")
+
+    monkeypatch.setattr(annotate_mod, "merge_sorted_chunks", fake_merge)
+    monkeypatch.setattr(annotate_mod, "run_eggnog_mapper", unexpected_emapper)
+    assert annotate_mod.run(
+        assignments=str(assignments), map_table=[], out=str(output),
+        data_dir=str(tmp_path), tmpdir=str(tmp_path / "chunks"), skip_eggnog=True,
+        proteins_out=str(proteins_out) if proteins_out else None,
+    ) == 0
+    with output.open() as handle:
+        row = next(csv.DictReader(handle, delimiter="\t"))
+    assert row["Annotation"] == "ATPase"
+    assert row["Protein ID"] == "protein1"
+    assert row["Eggnog"] == "SKIPPED"
+    assert all(value == "" for key, value in row.items() if key.startswith("eggnog_"))
+    saved = proteins_out or tmp_path / "annotated.tsv.proteins.faa"
+    assert saved.read_text() == protein_sequence
+
+
+def test_protein_output_rejects_annotation_path_collision(tmp_path):
+    with pytest.raises(SystemExit, match="must be distinct"):
+        annotate_mod.run("input.clp", [], str(tmp_path / "out.tsv"),
+                         proteins_out=str(tmp_path / "out.tsv"))
+
+
+def test_protein_output_rejects_taxa_only(tmp_path):
+    with pytest.raises(SystemExit, match="cannot be used with --taxa-only"):
+        annotate_mod.run("input.clp", [], str(tmp_path / "out.tsv"),
+                         taxa_only=True, proteins_out=str(tmp_path / "proteins.faa"))
 
 
 def test_parse_assignments_line_blank_and_no_colon():
@@ -126,6 +180,62 @@ def test_prepare_resources_sorts_indexes_and_reports(tmp_path):
     assert rows[0]["status"] == "READY"
     assert rows[0]["gff_sort_status"] == "SORTED"
     assert rows[0]["gff_index_status"] == "INDEXED"
+
+
+@pytest.mark.parametrize("index_case", ["valid", "internal_separator", "incompatible"])
+def test_gff_separator_index_validation_and_repair(tmp_path, index_case):
+    import pysam
+
+    assembly = "GCF_1.1"
+    folder = tmp_path / "ncbi_dataset" / "data" / assembly
+    folder.mkdir(parents=True)
+    original = folder / "genomic.gff"
+    contents = "##gff-version 3\n###\n"
+    contents += "NC_1\tRefSeq\tCDS\t5\t10\t.\t+\t0\tID=cds-a\n"
+    if index_case == "internal_separator":
+        contents += "###\n"
+    contents += "NC_1\tRefSeq\tCDS\t20\t30\t.\t+\t0\tID=cds-b\n"
+    original.write_text(contents)
+    (folder / "protein.faa").write_text(">a\nMKK\n")
+    compressed = pysam.tabix_index(str(original), preset="gff", keep_original=True)
+    index = compressed + ".tbi"
+    if index_case == "incompatible":
+        # Simulate an index with an incompatible start-coordinate column.
+        with gzip.open(index, "rb") as handle:
+            data = bytearray(handle.read())
+        struct.pack_into("<i", data, 16, 5)
+        with pysam.BGZFile(index, "wb") as handle:
+            handle.write(bytes(data))
+    index_before = open(index, "rb").read()
+    mapping = MappingRow("1", 101, assembly, "NC_1", "contig", "", "")
+    report = tmp_path / "resources.tsv"
+    prepared, ready = prepare_annotation_resources({assembly: mapping}, str(tmp_path), str(report))
+    assert ready
+    with report.open() as handle:
+        row = next(csv.DictReader(handle, delimiter="\t"))
+    assert row["gff_index_status"] == ("ALREADY_INDEXED" if index_case == "valid" else "REINDEXED")
+    assert original.read_text() == contents
+    assert open(index, "rb").read() == index_before
+    with pysam.TabixFile(prepared[assembly].gff_path) as tb:
+        assert len(list(tb.fetch("NC_1"))) == 2
+    # Reuse a derivative on subsequent runs rather than rebuilding it.
+    prepared, ready = prepare_annotation_resources({assembly: mapping}, str(tmp_path), str(report))
+    assert ready
+    with report.open() as handle:
+        assert next(csv.DictReader(handle, delimiter="\t"))["gff_index_status"] == "ALREADY_INDEXED"
+
+
+def test_gff_query_failure_is_not_silently_ignored():
+    class BadTabix:
+        def fetch(self, contig):
+            raise ValueError("Failed to parse GFF")
+
+    annotator = annotate_mod.IntervalGFFAnnotator.__new__(annotate_mod.IntervalGFFAnnotator)
+    annotator._get_tabix = lambda assembly: BadTabix()
+    annotator._IntervalTree = list
+    annotator.by_assembly = {"asm": MappingRow("1", 101, "asm", "NC_1", "", "bad.gff.gz", "")}
+    with pytest.raises(annotate_mod.GFFQueryError, match="partial CDS annotations discarded"):
+        annotator._build_tree_for_contig("asm", "NC_1")
 
 
 def test_prepare_resources_reports_missing_files(tmp_path):

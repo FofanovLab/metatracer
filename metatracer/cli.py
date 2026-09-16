@@ -634,6 +634,10 @@ def taxa_report_filter_cmd(
 )
 @click.option("--emapper", default="emapper.py", show_default=True,
               help="eggNOG-mapper executable.")
+@click.option("--skip-eggnog", is_flag=True,
+              help="Skip eggNOG; retain GFF/protein annotations with Eggnog=SKIPPED.")
+@click.option("--proteins-out", default=None,
+              help="Save unique eggNOG input proteins (default: <out>.proteins.faa).")
 @click.option("--eggnog-cpu", type=click.IntRange(min=1), default=1,
               show_default=True, help="CPUs passed to eggNOG-mapper.")
 @click.option("--eggnog-data-dir", default=None,
@@ -672,6 +676,8 @@ def annotate_cmd(
     gff_pattern: str,
     protein_pattern: str,
     emapper: str,
+    skip_eggnog: bool,
+    proteins_out: Optional[str],
     eggnog_cpu: int,
     eggnog_data_dir: Optional[str],
     emapper_args: tuple[str, ...],
@@ -697,6 +703,8 @@ def annotate_cmd(
         gff_pattern=gff_pattern,
         protein_pattern=protein_pattern,
         emapper=emapper,
+        skip_eggnog=skip_eggnog,
+        proteins_out=proteins_out,
         eggnog_cpu=eggnog_cpu,
         eggnog_data_dir=eggnog_data_dir,
         emapper_args=emapper_args,

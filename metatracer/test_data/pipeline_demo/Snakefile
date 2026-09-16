@@ -15,6 +15,7 @@ EGGNOG_DOWNLOADER = config.get("eggnog_downloader", "download_eggnog_data.py")
 OUT = config.get("output_dir", "results").rstrip("/")
 THREADS = int(config.get("threads", 1))
 TAXA_ONLY = bool(config.get("taxa_only", False))
+SKIP_EGGNOG = bool(config.get("skip_eggnog", False))
 COUNT_COLUMNS = config.get("count_columns", ["taxid"])
 
 if READS_FORMAT not in {"fasta", "fastq"}:
@@ -25,7 +26,7 @@ if not MAP_TABLES:
     raise ValueError("config.yaml must list at least one map table")
 if not TAXA_ONLY and not REFERENCE_BASEPATH:
     raise ValueError("reference_basepath is required when taxa_only is false")
-if not TAXA_ONLY and not EGGNOG_DATA_DIR:
+if not TAXA_ONLY and not SKIP_EGGNOG and not EGGNOG_DATA_DIR:
     raise ValueError("eggnog_data_dir is required when taxa_only is false")
 if not COUNT_COLUMNS:
     raise ValueError("count_columns must contain at least one annotation column")
@@ -36,11 +37,12 @@ MERGED = f"{OUT}/merged/reads.clp"
 REPORT = f"{OUT}/merged/taxa_report.tsv"
 ANNOTATED = f"{OUT}/annotated/reads.tsv"
 RESOURCE_REPORT = f"{OUT}/annotated/resources.tsv"
+PROTEINS = f"{OUT}/annotated/unique_proteins.faa"
 COUNTS = f"{OUT}/counts.tsv"
 EGGNOG_PATH = str(EGGNOG_DATA_DIR or ".eggnog_data").rstrip("/")
 EGGNOG_FILES = (
     []
-    if TAXA_ONLY
+    if TAXA_ONLY or SKIP_EGGNOG
     else [
         f"{EGGNOG_PATH}/eggnog.db",
         f"{EGGNOG_PATH}/eggnog_proteins.dmnd",
@@ -58,6 +60,8 @@ rule assign:
         reads=READS,
     output:
         f"{OUT}/assign/index_{{index}}.bn",
+    log:
+        f"{OUT}/logs/assign/index_{{index}}.log",
     params:
         index=lambda wildcards: INDICES[int(wildcards.index)],
         reads_flag=f"--{READS_FORMAT}",
@@ -65,7 +69,8 @@ rule assign:
         THREADS
     shell:
         """
-        mkdir -p {OUT:q}/assign
+        mkdir -p {OUT:q}/assign {OUT:q}/logs/assign
+        exec > {log:q} 2>&1
         metatracer assign \
           {params.reads_flag} {input.reads:q} \
           --index {params.index:q} \
@@ -81,11 +86,14 @@ rule merge:
     output:
         merged=MERGED,
         report=REPORT,
+    log:
+        f"{OUT}/logs/merge.log",
     threads:
         THREADS
     shell:
         """
-        mkdir -p {OUT:q}/merged
+        mkdir -p {OUT:q}/merged {OUT:q}/logs
+        exec > {log:q} 2>&1
         metatracer merge \
           --output {output.merged:q} \
           --report {output.report:q} \
@@ -98,11 +106,15 @@ rule download_eggnog_data:
     output:
         annotation=f"{EGGNOG_PATH}/eggnog.db",
         diamond=f"{EGGNOG_PATH}/eggnog_proteins.dmnd",
+    log:
+        f"{OUT}/logs/download_eggnog_data.log",
     params:
         data_dir=EGGNOG_DATA_DIR,
         downloader=EGGNOG_DOWNLOADER,
     shell:
         """
+        mkdir -p {OUT:q}/logs
+        exec > {log:q} 2>&1
         mkdir -p {params.data_dir:q}
         downloader=$(command -v {params.downloader:q})
         fixed_downloader=$(mktemp)
@@ -122,11 +134,16 @@ rule annotate:
         eggnog=EGGNOG_FILES,
     output:
         table=ANNOTATED,
+        proteins=[] if TAXA_ONLY else PROTEINS,
+    log:
+        f"{OUT}/logs/annotate.log",
     params:
         map_args=lambda wildcards, input: " ".join(
             f"--map-table {quote(str(path))}" for path in input.maps
         ),
         taxa_only="--taxa-only" if TAXA_ONLY else "",
+        skip_eggnog="--skip-eggnog" if SKIP_EGGNOG else "",
+        proteins="" if TAXA_ONLY else f"--proteins-out {quote(PROTEINS)}",
         reference=(
             ""
             if TAXA_ONLY
@@ -139,20 +156,23 @@ rule annotate:
         ),
         eggnog_data=(
             ""
-            if TAXA_ONLY
+            if TAXA_ONLY or SKIP_EGGNOG
             else f"--eggnog-data-dir {quote(str(EGGNOG_DATA_DIR))}"
         ),
     threads:
         THREADS
     shell:
         """
-        mkdir -p {OUT:q}/annotated
+        mkdir -p {OUT:q}/annotated {OUT:q}/logs
+        exec > {log:q} 2>&1
         metatracer annotate {input.assignments:q} \
           {params.map_args} \
           --out {output.table:q} \
           --eggnog-cpu {threads} \
           {params.eggnog_data} \
           {params.taxa_only} \
+          {params.skip_eggnog} \
+          {params.proteins} \
           {params.reference} \
           {params.resource_report}
         """
@@ -163,12 +183,16 @@ rule count:
         ANNOTATED,
     output:
         COUNTS,
+    log:
+        f"{OUT}/logs/count.log",
     params:
         columns=" ".join(
             f"--column {quote(str(column))}" for column in COUNT_COLUMNS
         ),
     shell:
         """
+        mkdir -p {OUT:q}/logs
+        exec > {log:q} 2>&1
         metatracer count \
           --input {input:q} \
           --output {output:q} \

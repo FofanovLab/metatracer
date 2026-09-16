@@ -17,6 +17,7 @@ map_tables:
 # skip those lookups. reference_basepath should contain
 # ncbi_dataset/data/<accession>/ directories when taxa_only is false.
 taxa_only: false
+skip_eggnog: false
 reference_basepath: /path/to/downloads/package
 
 # eggNOG-mapper does not bundle its databases. The workflow downloads the core

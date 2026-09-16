@@ -23,7 +23,7 @@ dependencies:
   - intervaltree >=3.1
   - ete3 >=3.1
   - tqdm >=4.64
-  - eggnog-mapper
+  - eggnog-mapper >=2.1.14,<3
 
   # Genome-download tools (install Snakemake separately to run the workflow)
   - ncbi-datasets-cli >=18.33.1

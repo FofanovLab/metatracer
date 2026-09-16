@@ -433,6 +433,12 @@ setup, eggNOG-mapper reports that `eggnog_proteins.dmnd` is missing. The
 `download_eggnog_data` rule that performs this setup when the database files
 are absent.
 
+Use `--skip-eggnog` to retain GFF/protein annotations without running
+eggNOG or requiring its databases. Output rows have `Eggnog=SKIPPED` and
+blank eggNOG result fields. In the example workflow, set `skip_eggnog: true`
+to also skip the database download. Unlike `--taxa-only`, this still requires
+the GFF and protein FASTA resources.
+
 Example:
 
 ```bash
@@ -705,10 +711,26 @@ patterns may use `{basepath}`, `{accession}`, and `{assembly}`. GFFs are checked
 and, when necessary, sorted, BGZF-compressed, and Tabix-indexed. The resource
 report contains `accession`, `assembly_path`, `gff_path`, `protein_path`,
 `gff_sort_status`, `gff_index_status`, `status`, and `message`.
+Existing GFF indices are validated against the source feature records and a
+coordinate query. Incompatible indices are rebuilt with the GFF preset in a
+derivative file; the original GFF and index are preserved.
+The derivative contains feature rows only: GFF comments/directives and any
+embedded FASTA are excluded to avoid Tabix failures on internal `###` separators.
+The report records `REINDEXED` and the reason. Index preparation failures are reported as
+`GFF_INDEX_FAILED`; later query failures stop annotation and are reported as
+`GFF_QUERY_FAILED`, rather than silently retaining partial CDS lookups.
 
-Proteins are deduplicated before eggNOG-mapper. Returned fields receive an
+Proteins are deduplicated before eggNOG-mapper.
+Full annotation also saves the exact deduplicated input FASTA to
+`<out>.proteins.faa`; use `--proteins-out PATH` to choose another location.
+FASTA IDs match the annotation table's `Protein ID` values, allowing a protein
+to map back to all associated hits. This file remains available if eggNOG fails
+or `--skip-eggnog` is used; it is empty if no proteins are collected.
+`--taxa-only` does not produce a protein FASTA.
+
+Returned fields receive an
 `eggnog_` prefix, and `eggnog_OG` contains the first OG without its taxonomic
-suffix. `Eggnog` reports `SUCCESS`, `FAILED`, or `NOT_RUN_NO_PROTEIN`. An
+suffix. `Eggnog` reports `SUCCESS`, `FAILED`, `SKIPPED`, or `NOT_RUN_NO_PROTEIN`. An
 eggNOG failure leaves deposited annotations intact and eggNOG fields blank.
 
 ```text
@@ -721,6 +743,10 @@ Options:
                                   indices built at different times. [required]
   -o, --out TEXT                  Output TSV. [required]
   --taxa-only                     Omit GFF, protein, and eggNOG lookups.
+  --skip-eggnog                   Skip eggNOG; retain GFF/protein annotations
+                                  with Eggnog=SKIPPED.
+  --proteins-out TEXT             Unique eggNOG input protein FASTA; default:
+                                  <out>.proteins.faa.
   --chunk-size INTEGER            Hits sorted per disk chunk. [default: 500000]
   --tmpdir TEXT                   Temporary chunk directory.
   --reference-basepath, --data-dir TEXT
