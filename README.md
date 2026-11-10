@@ -667,11 +667,107 @@ Options:
   -h, --help                   Show this message and exit.
 ```
 
+### `metatracer coverage`
+
+Estimate covered reference bases without loading reference sequences or genome
+lengths. Input is the CLP headered TSV table with `read_id`, `read_length`,
+`taxa`, `GID`, and `position` columns. Taxa, GIDs, and positions are parallel
+semicolon-separated lists, as emitted by mtsv-tools table output. A table with
+one assignment per row is also accepted.
+
+```bash
+metatracer coverage \
+  --input sample.assignments.tsv \
+  --out sample.taxa-coverage.tsv \
+  --genome-out sample.genome-coverage.tsv \
+  --approx-read-length 150
+```
+
+Each hit contributes an interval of `read_length` bases beginning at its
+position. Overlapping intervals are merged separately for each TaxID–GID pair.
+The taxon report selects the **maximum** covered-base count across its GIDs,
+rather than summing across references. Ties select the smallest numeric GID.
+`--approx-read-length` is optional and supplies a positive fallback only when
+the table's read length is absent, blank, or zero. Missing lengths without a
+fallback and malformed assignment lists are errors.
+
+The taxon TSV columns are `taxid`, `supporting_reads` (unique read IDs across
+the taxon), `genomes_hit` (distinct GIDs), `max_covered_bases`,
+`max_coverage_gid`, and `max_coverage_supporting_reads` (unique read IDs for
+that GID). Optional `--genome-out` writes `taxid`, `GID`, `supporting_reads`,
+and `covered_bases` for every TaxID–GID pair.
+
+When the table includes `edit_distance` (a parallel semicolon-separated list),
+both reports also summarize edit distances. Each unique read contributes its
+**lowest retained edit distance** for that taxon, or for that TaxID–GID in the
+per-genome report. Taxon edit statistics combine reads across all its GIDs;
+they are not restricted to the GID with maximum coverage. Duplicate hits and
+multiple reference genomes therefore do not multiply a read's contribution.
+Repeated read IDs for a taxon must have consistent read lengths.
+
+Additional columns:
+
+| Column | Meaning |
+| --- | --- |
+| `edit_reads` | Number of unique reads contributing to the distribution |
+| `edit_min`, `edit_mean`, `edit_median`, `edit_p90`, `edit_max` | Raw edit-distance summaries |
+| `edit_zero_fraction` | Fraction of contributing reads with zero edits |
+| `edit_rate_mean`, `edit_rate_median`, `edit_rate_p90` | Summaries of each read's edit distance divided by its read length |
+| `edit_histogram` | JSON object mapping raw edit distance to unique-read count |
+
+Quantiles use linear interpolation. Edit rates are fractions (0.03 means three
+edits per 100 read bases), using the same table length or fallback as coverage.
+If the entire `edit_distance` column is absent, coverage still runs and writes
+`edit_reads=0` with blank edit statistics. If the column is present, invalid,
+missing, negative, or mismatched edit values are errors.
+
+A distribution shifted toward higher edit rates can help flag possible distant
+reference matches for investigation. This is not a diagnosis of a missing taxon:
+read errors and alignment ambiguity can also contribute. Assignment cutoffs
+truncate the observed distribution, and any upstream filtering changes it.
+For that investigation, generate this report before removing higher-edit hits.
+These edit summaries are reported for inspection; `taxa-report-filter` currently
+uses only `max_covered_bases` from the coverage report.
+
+Here, a genome means an assignment GID, which may identify a single contig;
+contigs are not grouped into assemblies. Estimates use read length rather
+than an alignment CIGAR, do not account for indels or reference boundaries,
+and reflect only the hit positions retained in the input. These are covered-base
+estimates, not genome coverage percentages. This command reports evidence;
+it does not remove taxa or apply coverage thresholds. It stores hit intervals
+and unique read IDs in memory.
+
 ### `metatracer taxa-report-filter`
 
 Applies abundance and support thresholds to a merge report and writes both a
 filtered report and one-TaxID-per-line passing and failing lists suitable for
 `metatracer filter`.
+
+To also filter by estimated covered bases, supply the separate **taxon** report
+from `metatracer coverage` (the `--out` file, not `--genome-out`):
+
+```bash
+metatracer taxa-report-filter \
+  --input sample.taxa-report.tsv \
+  --coverage-report sample.taxa-coverage.tsv \
+  --min-covered-bases 1000 \
+  --out sample.filtered-taxa.tsv \
+  --include-out passing.txt \
+  --exclude-out failing.txt \
+  --log sample.taxa-filter.log
+```
+
+Coverage rows are matched by TaxID. A taxon must have `max_covered_bases` greater
+than or equal to the cutoff **and** meet every other supplied threshold. Taxa
+missing from the coverage report fail when a coverage cutoff is enabled,
+including at cutoff zero. The cutoff is a nonnegative integer count of bases,
+not a percentage, and requires `--coverage-report`. Duplicate TaxIDs or invalid
+coverage values are errors. Without `--min-covered-bases`, coverage does not
+affect passing/failing decisions. The filtered support report retains its
+original columns; the log records the coverage source, cutoff, coverage failures,
+and missing-coverage count. Coverage failures are counted before other thresholds.
+Use the failing list with `metatracer filter --exclude-taxa failing.txt` to
+remove those taxa's assignments.
 
 ```text
 Usage: metatracer taxa-report-filter [OPTIONS]
@@ -680,6 +776,8 @@ Usage: metatracer taxa-report-filter [OPTIONS]
 
 Options:
   --input TEXT                       Input taxa report (TSV/CSV). [required]
+  --coverage-report PATH             Taxon report from metatracer coverage.
+  --min-covered-bases INTEGER        Minimum max_covered_bases (requires report).
   --out TEXT                         Filtered report. [required]
   --include-out TEXT                 Passing TaxIDs, one per line. [required]
   --exclude-out TEXT                 Failing TaxIDs, one per line. [required]

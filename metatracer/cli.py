@@ -91,7 +91,7 @@ RUST_BINARIES: Dict[str, str] = {
 
 COMMAND_GROUPS = [
     ("Build Reference Index", ["reference-build", "index-build"]),
-    ("Assignment", ["assign", "merge", "filter", "taxa-report-filter", "annotate", "count"]),
+    ("Assignment", ["assign", "merge", "filter", "taxa-report-filter", "coverage", "annotate", "count"]),
     ("Utility", ["extract-reads"]),
 ]
 
@@ -334,6 +334,22 @@ def merge_cmd(
     argv += list(inputs)
     _run(exe, argv)
 
+@cli.command(name="coverage")
+@click.option("--input", "input_path", required=True, type=click.Path(exists=True, dir_okay=False),
+              help="CLP assignment table (TSV with parallel taxa/GID/position lists).")
+@click.option("--out", required=True, help="Per-taxon covered-base report (TSV).")
+@click.option("--genome-out", default=None, help="Optional per-TaxID/GID report (TSV).")
+@click.option("--approx-read-length", type=click.IntRange(min=1), default=None,
+              help="Fallback for missing or zero read_length; table lengths take precedence.")
+def coverage_cmd(input_path, out, genome_out, approx_read_length):
+    """Report covered bases and edit distributions per taxon and optionally GID."""
+    from .coverage import run
+    try:
+        run(input_path, out, approx_read_length, genome_out)
+    except (ValueError, OSError) as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
 #### EXTRACT READS ####
 
 
@@ -494,6 +510,10 @@ def filter_cmd(
 
 
 @cli.command(name="taxa-report-filter")
+@click.option("--coverage-report", type=click.Path(exists=True, dir_okay=False), default=None,
+              help="Taxon report produced by metatracer coverage.")
+@click.option("--min-covered-bases", type=click.IntRange(min=0), default=None,
+              help="Minimum max_covered_bases; requires --coverage-report.")
 @click.option("--input", "input_path", required=True, help="Input taxa summary report (TSV/CSV).")
 @click.option("--out", "out_path", required=True, help="Output filtered report path.")
 @click.option("--include-out", required=True, help="Output path for passing taxids (one per line).")
@@ -516,6 +536,8 @@ def filter_cmd(
 @click.option("--min-strong-vs-weak-ratio", type=float, default=None,
               help="Minimum (only_hit + only_best) / (tied_best + not_best).")
 def taxa_report_filter_cmd(
+    coverage_report: Optional[str],
+    min_covered_bases: Optional[int],
     input_path: str,
     out_path: str,
     include_out: str,
@@ -547,6 +569,10 @@ def taxa_report_filter_cmd(
         "--exclude-out", exclude_out,
         "--log", log_path,
     ]
+    if coverage_report is not None:
+        argv += ["--coverage-report", coverage_report]
+    if min_covered_bases is not None:
+        argv += ["--min-covered-bases", str(min_covered_bases)]
     if min_only_hit is not None:
         argv += ["--min-only-hit", str(min_only_hit)]
     if min_only_hit_pct is not None:

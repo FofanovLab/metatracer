@@ -120,6 +120,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--include-out", required=True, help="Output file with passing taxids (one per line).")
     ap.add_argument("--exclude-out", required=True, help="Output file with failing taxids (one per line).")
     ap.add_argument("--log", required=True, help="Log file path for parameters + summary.")
+    ap.add_argument("--coverage-report", help="Taxon TSV/CSV produced by metatracer coverage.")
+    ap.add_argument("--min-covered-bases", type=int, default=None,
+                    help="Minimum max_covered_bases; requires --coverage-report.")
 
     ap.add_argument("--min-only-hit", type=float, default=None, help="Minimum only_hit.")
     ap.add_argument("--min-only-hit-pct", type=float, default=None, help="Minimum only_hit_pct.")
@@ -150,6 +153,27 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="Minimum (only_hit + only_best) / (tied_best + not_best).",
     )
     args = ap.parse_args(argv)
+    if args.min_covered_bases is not None:
+        if args.min_covered_bases < 0:
+            ap.error("--min-covered-bases must be >= 0")
+        if not args.coverage_report:
+            ap.error("--min-covered-bases requires --coverage-report")
+    coverage = {}
+    if args.coverage_report:
+        coverage_path = Path(args.coverage_report)
+        with coverage_path.open(newline="", encoding="utf-8") as stream:
+            coverage_reader = csv.DictReader(stream, delimiter=sniff_delimiter(coverage_path))
+            if not {"taxid", "max_covered_bases"}.issubset(coverage_reader.fieldnames or []):
+                ap.error("Coverage report requires taxid and max_covered_bases columns")
+            for entry in coverage_reader:
+                try:
+                    taxid = str(int(entry["taxid"]))
+                    bases = int(entry["max_covered_bases"])
+                    if bases < 0 or int(taxid) < 0 or taxid in coverage:
+                        raise ValueError("negative value or duplicate TaxID")
+                except (ValueError, TypeError) as exc:
+                    ap.error(f"Invalid coverage report row {coverage_reader.line_num}: {exc}")
+                coverage[taxid] = bases
 
     in_path = Path(args.input)
     out_path = Path(args.out)
@@ -184,6 +208,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     pass_rows = 0
     fail_rows = 0
     missing_taxid_rows = 0
+    coverage_fail_rows = 0
+    coverage_missing_rows = 0
 
     with in_path.open("rt", encoding="utf-8", errors="replace", newline="") as fin:
         reader = csv.DictReader(fin, delimiter=delim)
@@ -208,6 +234,19 @@ def main(argv: Optional[List[str]] = None) -> int:
                     fail_rows += 1
                     continue
 
+                if args.min_covered_bases is not None:
+                    try:
+                        bases = coverage.get(str(int(taxid)))
+                    except ValueError:
+                        bases = None
+                    if bases is None:
+                        coverage_missing_rows += 1
+                    if bases is None or bases < args.min_covered_bases:
+                        coverage_fail_rows += 1
+                        fail_rows += 1
+                        fexclude.write(f"{taxid}\n")
+                        continue
+
                 if not row_passes(
                     row,
                     mins,
@@ -230,6 +269,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         flog.write(f"out:         {out_path}\n")
         flog.write(f"include_out: {include_path}\n")
         flog.write(f"exclude_out: {exclude_path}\n\n")
+        flog.write(f"coverage_report: {args.coverage_report or 'none'}\n")
+        flog.write(f"min_covered_bases: {args.min_covered_bases if args.min_covered_bases is not None else 'none'}\n")
         flog.write("Minimum cutoffs used:\n")
         for col in [
             "only_hit",
@@ -261,6 +302,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         flog.write(f"rows_pass:         {pass_rows}\n")
         flog.write(f"rows_fail:         {fail_rows}\n")
         flog.write(f"rows_missing_taxid:{missing_taxid_rows}\n")
+        flog.write(f"rows_fail_coverage: {coverage_fail_rows}\n")
+        flog.write(f"rows_missing_coverage: {coverage_missing_rows}\n")
 
     return 0
 
